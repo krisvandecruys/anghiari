@@ -1,0 +1,28 @@
+[project]
+name = "anghiari"
+version = "0.1.0"
+description = "Maps free-text attack descriptions to MITRE ATT&CK techniques using local ML"
+readme = "README.md"
+requires-python = ">=3.13"
+license = { text = "MIT" }
+keywords = ["mitre", "att&ck", "cybersecurity", "nlp", "embeddings", "rag"]
+dependencies = [
+    "chromadb>=1.5.7",
+    "fastmcp>=3.2.4",
+    "litestar>=2.21.1",
+    "llama-cpp-python>=0.3.20",
+    "pydantic>=2.13.0",
+    "requests>=2.33.1",
+    "sentence-transformers>=5.4.1",
+    "typer>=0.24.1",
+]
+
+[project.scripts]
+anghiari = "anghiari.cli:main"
+
+[build-system]
+requires = ["uv_build>=0.1,<0.12"]
+build-backend = "uv_build"
+
+[tool.uv]
+package = true

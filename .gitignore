@@ -1,0 +1,29 @@
+# Virtual environment
+.venv/
+
+# Generated data (rebuild with gioconda-index)
+data/
+
+# Downloaded model weights — large files, not for version control
+models/
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+dist/
+build/
+wheels/
+.eggs/
+
+# Test output
+*.json
+!pyproject.toml
+
+# macOS
+.DS_Store
+
+# Editor
+.idea/
+.vscode/
+*.swp
