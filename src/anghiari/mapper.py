@@ -5,12 +5,42 @@ Both models are downloaded automatically from HuggingFace Hub on first use
 and cached in ~/.cache/huggingface/hub/.
 """
 
+import contextlib
 import json
-import sys
+import logging
+import os
+import warnings
 from pathlib import Path
 
 import chromadb
 from llama_cpp import Llama
+
+# llama-cpp-python passes a deprecated kwarg to hf_hub_download — not our bug, filter it.
+warnings.filterwarnings(
+    "ignore",
+    message="The `local_dir_use_symlinks` argument is deprecated",
+    category=UserWarning,
+)
+
+_log = logging.getLogger(__name__)
+
+
+@contextlib.contextmanager
+def _quiet_stderr():
+    """Redirect the C-level stderr fd to /dev/null.
+
+    llama.cpp prints directly to fd 2 (bypassing Python logging), so the only
+    reliable way to suppress those messages is at the OS level.
+    """
+    devnull = os.open(os.devnull, os.O_WRONLY)
+    saved = os.dup(2)
+    os.dup2(devnull, 2)
+    os.close(devnull)
+    try:
+        yield
+    finally:
+        os.dup2(saved, 2)
+        os.close(saved)
 
 from .embedder import embed_query
 from .models import SearchResult, TechniqueMatch
@@ -47,15 +77,16 @@ def _get_collection():
 def _get_llm() -> Llama:
     global _llm
     if _llm is None:
-        print(f"Loading LLM ({LLM_REPO_ID} / {LLM_FILENAME})...", file=sys.stderr)
-        _llm = Llama.from_pretrained(
-            repo_id=LLM_REPO_ID,
-            filename=LLM_FILENAME,
-            n_ctx=131072,
-            n_gpu_layers=-1,  # Metal: offload all layers to GPU on Apple Silicon
-            verbose=False,
-            chat_format="chatml",
-        )
+        _log.info("Loading LLM (%s / %s)", LLM_REPO_ID, LLM_FILENAME)
+        with _quiet_stderr():
+            _llm = Llama.from_pretrained(
+                repo_id=LLM_REPO_ID,
+                filename=LLM_FILENAME,
+                n_ctx=8192,       # plenty for our prompts; avoids n_ctx_train noise
+                n_gpu_layers=-1,  # Metal: offload all layers to GPU on Apple Silicon
+                verbose=False,
+                chat_format="chatml",
+            )
     return _llm
 
 

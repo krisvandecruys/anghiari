@@ -9,7 +9,7 @@ The model is downloaded automatically from HuggingFace Hub on first call
 and cached in ~/.cache/huggingface/hub/.
 """
 
-import sys
+import logging
 
 import numpy as np
 from sentence_transformers import SentenceTransformer
@@ -19,12 +19,17 @@ MODEL_ID = "microsoft/harrier-oss-v1-0.6b"
 _QUERY_PREFIX = "Retrieve semantically similar text: "
 
 _model: SentenceTransformer | None = None
+_log = logging.getLogger(__name__)
 
 
 def _get_model() -> SentenceTransformer:
     global _model
     if _model is None:
-        print("Loading embedding model...", file=sys.stderr)
+        _log.info("Loading embedding model %s", MODEL_ID)
+        # Suppress the safetensors/transformers tqdm progress bar during weight loading
+        import transformers
+        transformers.logging.set_verbosity_error()
+        transformers.logging.disable_progress_bar()
         _model = SentenceTransformer(MODEL_ID)
     return _model
 
