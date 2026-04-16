@@ -2,7 +2,7 @@
 
 > *The Battle of Anghiari was lost to time, yet studied and interpreted for centuries. So are the techniques of adversaries.*
 
-Anghiari searches free-text descriptions of attack behaviors against [MITRE ATT&CK](https://attack.mitre.org/) Enterprise techniques. Give it a sentence about what an attacker did; it returns the technique ID, a confidence score, and the reasoning behind the match.
+Anghiari searches free-text descriptions of attack behaviors against [MITRE ATT&CK](https://attack.mitre.org/) Enterprise techniques. Give it a sentence about what an attacker did; it returns the technique ID, a verbal confidence level, and the reasoning behind the match.
 
 Everything runs 100% locally. No API keys. No external calls at query time.
 
@@ -67,7 +67,7 @@ anghiari search "adversary dumped credentials from LSASS memory"
   "best_match": {
     "technique_id": "T1003.001",
     "name": "OS Credential Dumping: LSASS Memory",
-    "confidence": 0.94,
+    "confidence": "CERTAIN",
     "rationale": "The description directly references LSASS memory, the primary target of OS credential dumping via tools like Mimikatz or ProcDump."
   },
   "candidates": [...]
@@ -117,9 +117,19 @@ Add to `claude_desktop_config.json`:
 }
 ```
 
+## Configuration
+
+On first run, `~/.config/anghiari/config.toml` is created with commented defaults. Edit it to change models, LLM parameters, prompts, cache location, and more.
+
+Pass `--config <file>` before any subcommand to use a different config file:
+
+```bash
+anghiari --config ~/my-config.toml search "..."
+```
+
 ## Data
 
-The index and model weights are excluded from version control (see `.gitignore`). After cloning, run `anghiari index` once to populate `data/`. Both HuggingFace models are cached in `~/.cache/huggingface/hub/`.
+The index and model weights are excluded from version control. After cloning, run `anghiari index` once to populate `~/.cache/anghiari/`. HuggingFace model weights are cached separately in `~/.cache/huggingface/hub/`. Both paths are configurable in `config.toml`.
 
 ## Project structure
 
@@ -127,11 +137,12 @@ The index and model weights are excluded from version control (see `.gitignore`)
 src/anghiari/
 ├── __init__.py      public API: search_technique, SearchResult, TechniqueMatch
 ├── cli.py           Typer CLI  ← anghiari search / index / api / mcp
+├── config.py        config loader — reads ~/.config/anghiari/config.toml
 ├── mapper.py        core pipeline: embed → search → LLM phase 1 → LLM phase 2
 ├── indexer.py       STIX fetch, parse, embed, store in ChromaDB
 ├── embedder.py      Harrier wrapper: embed_query / embed_documents
 ├── prompt.py        LLM prompt builders
-├── models.py        Pydantic types
+├── models.py        Pydantic types (incl. Confidence literal)
 ├── api.py           Litestar REST API
 └── mcp.py           FastMCP server
 ```

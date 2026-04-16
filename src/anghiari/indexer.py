@@ -8,31 +8,27 @@ import json
 import re
 import sys
 from collections import defaultdict
-from pathlib import Path
 
 import chromadb
 import requests
 
 from .embedder import embed_documents
 
-DATA_DIR = Path("data")
-STIX_URL = "https://raw.githubusercontent.com/mitre/cti/master/enterprise-attack/enterprise-attack.json"
-STIX_CACHE = DATA_DIR / "enterprise-attack.json"
-CHROMA_DIR = DATA_DIR / "chroma_db"
-SUBTECH_MAP_FILE = DATA_DIR / "subtechnique_map.json"
 COLLECTION_NAME = "mitre_techniques"
 
 
 def fetch_stix() -> dict:
-    if STIX_CACHE.exists():
-        print(f"Using cached STIX data from {STIX_CACHE}")
-        return json.loads(STIX_CACHE.read_text())
-    print(f"Fetching STIX bundle from {STIX_URL} ...")
-    resp = requests.get(STIX_URL, timeout=60)
+    from .config import get_config
+    cfg = get_config()
+    if cfg.stix_cache.exists():
+        print(f"Using cached STIX data from {cfg.stix_cache}")
+        return json.loads(cfg.stix_cache.read_text())
+    print(f"Fetching STIX bundle from {cfg.stix.url} ...")
+    resp = requests.get(cfg.stix.url, timeout=cfg.stix.fetch_timeout)
     resp.raise_for_status()
-    DATA_DIR.mkdir(exist_ok=True)
-    STIX_CACHE.write_text(resp.text)
-    print(f"Saved to {STIX_CACHE}")
+    cfg.cache_dir.mkdir(parents=True, exist_ok=True)
+    cfg.stix_cache.write_text(resp.text)
+    print(f"Saved to {cfg.stix_cache}")
     return resp.json()
 
 
@@ -83,13 +79,15 @@ def build_subtechnique_map(techniques: list[dict]) -> dict[str, list[dict]]:
 
 
 def embed_and_index(techniques: list[dict]) -> None:
+    from .config import get_config
+    chroma_dir = get_config().chroma_dir
     texts = [f"{t['name']}. {t['description']}" for t in techniques]
 
     print(f"Embedding {len(texts)} techniques ...")
     embeddings = embed_documents(texts, show_progress=True)
 
-    print(f"Storing in ChromaDB at {CHROMA_DIR} ...")
-    client = chromadb.PersistentClient(path=str(CHROMA_DIR))
+    print(f"Storing in ChromaDB at {chroma_dir} ...")
+    client = chromadb.PersistentClient(path=str(chroma_dir))
 
     try:
         client.delete_collection(COLLECTION_NAME)
@@ -110,7 +108,9 @@ def embed_and_index(techniques: list[dict]) -> None:
 
 
 def main() -> None:
-    DATA_DIR.mkdir(exist_ok=True)
+    from .config import get_config
+    cfg = get_config()
+    cfg.cache_dir.mkdir(parents=True, exist_ok=True)
 
     bundle = fetch_stix()
     techniques = extract_techniques(bundle)
@@ -120,12 +120,12 @@ def main() -> None:
         sys.exit(1)
 
     subtech_map = build_subtechnique_map(techniques)
-    SUBTECH_MAP_FILE.write_text(json.dumps(subtech_map, indent=2))
+    cfg.subtech_map.write_text(json.dumps(subtech_map, indent=2))
     parent_count = len(subtech_map)
     subtech_count = sum(len(v) for v in subtech_map.values())
     print(
         f"Subtechnique map: {parent_count} parents, "
-        f"{subtech_count} subtechniques → {SUBTECH_MAP_FILE}"
+        f"{subtech_count} subtechniques → {cfg.subtech_map}"
     )
 
     embed_and_index(techniques)

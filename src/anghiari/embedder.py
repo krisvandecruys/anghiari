@@ -14,10 +14,6 @@ import logging
 import numpy as np
 from sentence_transformers import SentenceTransformer
 
-MODEL_ID = "microsoft/harrier-oss-v1-0.6b"
-# Harrier is instruction-aware for queries; documents are encoded without a prefix.
-_QUERY_PREFIX = "Retrieve semantically similar text: "
-
 _model: SentenceTransformer | None = None
 _log = logging.getLogger(__name__)
 
@@ -25,19 +21,23 @@ _log = logging.getLogger(__name__)
 def _get_model() -> SentenceTransformer:
     global _model
     if _model is None:
-        _log.info("Loading embedding model %s", MODEL_ID)
+        from .config import get_config
+        model_id = get_config().embedder.model_id
+        _log.info("Loading embedding model %s", model_id)
         # Suppress the safetensors/transformers tqdm progress bar during weight loading
         import transformers
         transformers.logging.set_verbosity_error()
         transformers.logging.disable_progress_bar()
-        _model = SentenceTransformer(MODEL_ID)
+        _model = SentenceTransformer(model_id)
     return _model
 
 
 def embed_query(text: str) -> list[float]:
     """Embed a single query string. Returns a 1024-dim L2-normalised vector."""
+    from .config import get_config
+    prefix = get_config().embedder.query_prefix
     vec = _get_model().encode(
-        [_QUERY_PREFIX + text],
+        [prefix + text],
         normalize_embeddings=True,
     )
     return vec[0].tolist()

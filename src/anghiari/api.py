@@ -40,4 +40,6 @@ app = Litestar(
 
 
 def run() -> None:
-    uvicorn.run("anghiari.api:app", host="0.0.0.0", port=8000, reload=False)
+    from .config import get_config
+    cfg = get_config().api
+    uvicorn.run("anghiari.api:app", host=cfg.host, port=cfg.port, reload=False)

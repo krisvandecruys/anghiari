@@ -5,18 +5,19 @@ from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     from .models import TechniqueMatch
 
-SYSTEM = (
-    "You are a MITRE ATT&CK expert. Given an attack description and candidate techniques, "
-    "identify the single best match. Respond ONLY with valid JSON — no markdown, no extra text."
+_JSON_SCHEMA = (
+    '{"technique_id": "T...", "name": "...", "confidence": "HIGH", "rationale": "..."}\n'
+    "confidence must be exactly one of (ordered lowest to highest): GUESS < LOW < MEDIUM < HIGH < CERTAIN\n"
+    "  GUESS = weak signal, speculative match;  CERTAIN = definitively matches, near-unmistakable"
 )
-
-_JSON_SCHEMA = '{"technique_id": "T...", "name": "...", "confidence": 0.0, "rationale": "..."}'
 
 
 def build_prompt(query: str, candidates: list[dict]) -> str:
+    from .config import get_config
+    trunc = get_config().prompts.description_truncate_phase1
     candidate_block = "\n".join(
         f"{i + 1}. [{c['mitre_id']}] {c['name']} (tactic: {c.get('tactic', 'unknown')})\n"
-        f"   {c['description'][:300]}"
+        f"   {c['description'][:trunc]}"
         for i, c in enumerate(candidates)
     )
     return (
@@ -31,8 +32,10 @@ def build_subtechnique_prompt(
     parent: "TechniqueMatch",
     subtechs: list[dict],
 ) -> str:
+    from .config import get_config
+    trunc = get_config().prompts.description_truncate_phase2
     subtech_block = "\n".join(
-        f"{i + 1}. [{s['mitre_id']}] {s['name']}\n   {s['description'][:400]}"
+        f"{i + 1}. [{s['mitre_id']}] {s['name']}\n   {s['description'][:trunc]}"
         for i, s in enumerate(subtechs)
     )
     return (

@@ -10,7 +10,6 @@ import json
 import logging
 import os
 import warnings
-from pathlib import Path
 
 import chromadb
 from llama_cpp import Llama
@@ -44,17 +43,9 @@ def _quiet_stderr():
 
 from .embedder import embed_query
 from .models import SearchResult, TechniqueMatch
-from .prompt import SYSTEM, build_prompt, build_subtechnique_prompt
+from .prompt import build_prompt, build_subtechnique_prompt
 
-# ── Paths (relative to working directory) ────────────────────────────────────
-DATA_DIR = Path("data")
-CHROMA_DIR = DATA_DIR / "chroma_db"
-SUBTECH_MAP_FILE = DATA_DIR / "subtechnique_map.json"
 COLLECTION_NAME = "mitre_techniques"
-
-# ── LLM — downloaded automatically from HuggingFace Hub ─────────────────────
-LLM_REPO_ID = "nvidia/NVIDIA-Nemotron-3-Nano-4B-GGUF"
-LLM_FILENAME = "NVIDIA-Nemotron3-Nano-4B-Q4_K_M.gguf"
 
 # ── Lazy singletons ───────────────────────────────────────────────────────────
 _collection = None
@@ -65,11 +56,13 @@ _subtech_map: dict[str, list[dict]] | None = None
 def _get_collection():
     global _collection
     if _collection is None:
-        if not CHROMA_DIR.exists():
+        from .config import get_config
+        chroma_dir = get_config().chroma_dir
+        if not chroma_dir.exists():
             raise RuntimeError(
-                f"ChromaDB index not found at {CHROMA_DIR}. Run `anghiari index` first."
+                f"ChromaDB index not found at {chroma_dir}. Run `anghiari index` first."
             )
-        client = chromadb.PersistentClient(path=str(CHROMA_DIR))
+        client = chromadb.PersistentClient(path=str(chroma_dir))
         _collection = client.get_collection(COLLECTION_NAME)
     return _collection
 
@@ -77,15 +70,17 @@ def _get_collection():
 def _get_llm() -> Llama:
     global _llm
     if _llm is None:
-        _log.info("Loading LLM (%s / %s)", LLM_REPO_ID, LLM_FILENAME)
+        from .config import get_config
+        llm_cfg = get_config().llm
+        _log.info("Loading LLM (%s / %s)", llm_cfg.repo_id, llm_cfg.filename)
         with _quiet_stderr():
             _llm = Llama.from_pretrained(
-                repo_id=LLM_REPO_ID,
-                filename=LLM_FILENAME,
-                n_ctx=8192,       # plenty for our prompts; avoids n_ctx_train noise
-                n_gpu_layers=-1,  # Metal: offload all layers to GPU on Apple Silicon
+                repo_id=llm_cfg.repo_id,
+                filename=llm_cfg.filename,
+                n_ctx=llm_cfg.n_ctx,
+                n_gpu_layers=llm_cfg.n_gpu_layers,
                 verbose=False,
-                chat_format="chatml",
+                chat_format=llm_cfg.chat_format,
             )
     return _llm
 
@@ -93,28 +88,38 @@ def _get_llm() -> Llama:
 def _get_subtech_map() -> dict[str, list[dict]]:
     global _subtech_map
     if _subtech_map is None:
-        if not SUBTECH_MAP_FILE.exists():
+        from .config import get_config
+        subtech_map_file = get_config().subtech_map
+        if not subtech_map_file.exists():
             raise RuntimeError(
-                f"Subtechnique map not found at {SUBTECH_MAP_FILE}. "
+                f"Subtechnique map not found at {subtech_map_file}. "
                 "Run `anghiari index` first."
             )
-        _subtech_map = json.loads(SUBTECH_MAP_FILE.read_text())
+        _subtech_map = json.loads(subtech_map_file.read_text())
     return _subtech_map
 
 
 def _llm_call(messages: list[dict]) -> TechniqueMatch:
+    from .config import get_config
+    llm_cfg = get_config().llm
     response = _get_llm().create_chat_completion(
         messages=messages,
         response_format={"type": "json_object"},
-        max_tokens=512,
-        temperature=0.1,
+        max_tokens=llm_cfg.max_tokens,
+        temperature=llm_cfg.temperature,
     )
     raw = response["choices"][0]["message"]["content"]
     return TechniqueMatch.model_validate_json(raw)
 
 
-def search_technique(query: str, top_k: int = 5) -> SearchResult:
+def search_technique(query: str, top_k: int | None = None) -> SearchResult:
     """Map a free-text attack description to the best-matching MITRE ATT&CK technique."""
+    from .config import get_config
+    cfg = get_config()
+    if top_k is None:
+        top_k = cfg.search.top_k
+    system = cfg.prompts.system
+
     # ── Phase 0: embed the query ─────────────────────────────────────────────
     query_vec = embed_query(query)
 
@@ -128,7 +133,7 @@ def search_technique(query: str, top_k: int = 5) -> SearchResult:
     # ── Phase 2: LLM picks best from top-k ──────────────────────────────────
     best = _llm_call(
         [
-            {"role": "system", "content": SYSTEM},
+            {"role": "system", "content": system},
             {"role": "user", "content": build_prompt(query, candidates)},
         ]
     )
@@ -138,7 +143,7 @@ def search_technique(query: str, top_k: int = 5) -> SearchResult:
     if subtechs:
         refined = _llm_call(
             [
-                {"role": "system", "content": SYSTEM},
+                {"role": "system", "content": system},
                 {
                     "role": "user",
                     "content": build_subtechnique_prompt(query, best, subtechs),

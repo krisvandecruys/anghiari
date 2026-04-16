@@ -21,12 +21,13 @@ mcp = FastMCP(
 
 
 @mcp.tool()
-def search_attack_technique(query: str, top_k: int = 5) -> dict:
+def search_attack_technique(query: str, top_k: int | None = None) -> dict:
     """Search for the best-matching MITRE ATT&CK technique for a free-text attack description.
 
     Args:
         query: Natural-language description of the observed attack behavior.
-        top_k: Number of candidate techniques to retrieve before LLM reranking (default 5).
+        top_k: Number of candidate techniques to retrieve before LLM reranking.
+               Defaults to the value configured in config.toml (default: 5).
 
     Returns:
         A dict with:

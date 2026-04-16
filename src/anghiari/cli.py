@@ -1,5 +1,6 @@
 import json
 from pathlib import Path
+from typing import Optional
 
 import typer
 
@@ -9,6 +10,21 @@ app = typer.Typer(
     no_args_is_help=True,
     rich_markup_mode="rich",
 )
+
+
+@app.callback()
+def _callback(
+    config: Optional[Path] = typer.Option(
+        None,
+        "--config",
+        "-c",
+        metavar="FILE",
+        help="Path to config file (default: ~/.config/anghiari/config.toml)",
+    ),
+) -> None:
+    from .config import load_config, set_config
+
+    set_config(load_config(config))
 
 
 @app.command()
@@ -35,7 +51,9 @@ def index(
     from .indexer import main as _index
 
     if force:
-        cache = Path("data/enterprise-attack.json")
+        from .config import get_config
+
+        cache = get_config().stix_cache
         if cache.exists():
             cache.unlink()
             typer.echo("Cleared STIX cache.")
