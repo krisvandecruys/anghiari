@@ -1,7 +1,5 @@
 """
 Build the ChromaDB vector index and subtechnique map from MITRE ATT&CK STIX data.
-
-Run with:  gioconda-index
 """
 
 import json
