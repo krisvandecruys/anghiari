@@ -8,6 +8,7 @@ import typer
 
 if TYPE_CHECKING:
     from .scanner import ScanResult
+    import rich.status
 
 app = typer.Typer(
     name="anghiari",
@@ -51,7 +52,12 @@ def _callback(
     set_config(load_config(config))
 
 
-def _run_llm_on_scan(query: str, scan_result: "ScanResult", top_n: int) -> "ScanResult":
+def _run_llm_on_scan(
+    query: str,
+    scan_result: "ScanResult",
+    top_n: int,
+    status: Optional["rich.status.Status"] = None,
+) -> "ScanResult":
     """Overlay LLM confidence + rationale onto scan results.
 
     For each chunk, passes its scan candidates (primary + co-techniques)
@@ -105,6 +111,11 @@ def _run_llm_on_scan(query: str, scan_result: "ScanResult", top_n: int) -> "Scan
         # How many slots we still need to reach top_n, ensuring every remaining chunk gets at least 1
         remaining_chunks = len(chunks_to_process) - 1 - i
         slots_needed = max(1, (top_n - len(merged)) - remaining_chunks)
+
+        if status:
+            status.update(
+                f"Refining chunk {i + 1}/{len(chunks_to_process)} with local LLM..."
+            )
 
         _log.info(
             "  Chunk %d/%d: %d candidates...",
@@ -236,32 +247,45 @@ def search(
         blob = sys.stdin.read()
 
     # Always run scan for provenance.  Fetch 2× candidates when LLM will rerank.
-    top_scan = top * 2 if not no_llm else top
-    _log.info("Scanning text against MITRE ATT&CK techniques (top %d)...", top_scan)
-    scan_result = scan_text(blob, top_scan)
+    from rich.console import Console
 
-    if not no_llm and scan_result.matches:
+    console = Console(stderr=True)
+    with console.status("Starting search...", spinner="dots") as status:
+        top_scan = top * 2 if not no_llm else top
+
+        status.update(
+            f"Scanning text against MITRE ATT&CK techniques (top {top_scan})..."
+        )
+        _log.info("Scanning text against MITRE ATT&CK techniques (top %d)...", top_scan)
+        scan_result = scan_text(blob, top_scan)
+
+        if not no_llm and scan_result.matches:
+            from dataclasses import replace
+
+            status.update("Refining scan results using local LLM...")
+            _log.info("Refining scan results using local LLM...")
+            scan_result = _run_llm_on_scan(blob, scan_result, top, status=status)
+
+            if not all_confidence:
+                status.update("Filtering matches to only HIGH or CERTAIN confidence...")
+                _log.info("Filtering matches to only HIGH or CERTAIN confidence...")
+                filtered = [
+                    m
+                    for m in scan_result.matches
+                    if m.confidence in ("HIGH", "CERTAIN")
+                ]
+                # Re-assign sequential color indices so rendering remains consistent
+                for idx, m in enumerate(filtered):
+                    filtered[idx] = replace(m, color_idx=idx)
+                scan_result = replace(scan_result, matches=filtered)
+
+        status.update(f"Returning top {top} distinct techniques.")
+        _log.info("Returning top %d distinct techniques.", top)
+
+        # Trim to requested top-N after optional LLM reorder.
         from dataclasses import replace
 
-        _log.info("Refining scan results using Nemotron LLM...")
-        scan_result = _run_llm_on_scan(blob, scan_result, top)
-
-        if not all_confidence:
-            _log.info("Filtering matches to only HIGH or CERTAIN confidence...")
-            filtered = [
-                m for m in scan_result.matches if m.confidence in ("HIGH", "CERTAIN")
-            ]
-            # Re-assign sequential color indices so rendering remains consistent
-            for idx, m in enumerate(filtered):
-                filtered[idx] = replace(m, color_idx=idx)
-            scan_result = replace(scan_result, matches=filtered)
-
-    _log.info("Returning top %d distinct techniques.", top)
-
-    # Trim to requested top-N after optional LLM reorder.
-    from dataclasses import replace
-
-    scan_result = replace(scan_result, matches=scan_result.matches[:top])
+        scan_result = replace(scan_result, matches=scan_result.matches[:top])
 
     if json_output:
         import dataclasses
