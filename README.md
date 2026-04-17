@@ -4,29 +4,31 @@
 
 [![Battle of Anghiari](https://upload.wikimedia.org/wikipedia/commons/c/c4/Peter_Paul_Ruben%27s_copy_of_the_lost_Battle_of_Anghiari.jpg)](https://commons.wikimedia.org/wiki/File:Peter_Paul_Ruben%27s_copy_of_the_lost_Battle_of_Anghiari.jpg)
 
-Anghiari searches free-text descriptions of attack behaviors against [MITRE ATT&CK](https://attack.mitre.org/) Enterprise techniques. Give it a sentence about what an attacker did; it returns the technique ID, a verbal confidence level, and the reasoning behind the match.
+Anghiari searches free-text descriptions of attack behaviors against [MITRE ATT&CK](https://attack.mitre.org/) Enterprise techniques. Give it a sentence about what an attacker did; it returns chunk-grounded matches with technique IDs, confidence, rationale, and source offsets.
 
 Everything runs 100% locally. No API keys. No external calls at query time.
 
 ## How it works
 
 ```
-your description
-      │
-      ▼
+ your description or report
+         │
+         ▼
+ multi-level chunking      paragraphs, sentences, overlaps, quotes
+         │
+         ▼
  Harrier embedder          microsoft/harrier-oss-v1-0.6b
- (semantic search)    ──▶  ChromaDB (local)  ──▶  top-5 candidates
-      │
-      ▼
+ (chunk search)       ──▶  ChromaDB (local)  ──▶  best chunk per technique
+         │
+         ▼
+ greedy span selection     distinct source spans + co-firing techniques
+         │
+         ▼
  Nemotron 4B LLM           nvidia/NVIDIA-Nemotron-3-Nano-4B-GGUF
- (phase 1: pick best technique from candidates)
-      │
-      ▼
- Nemotron 4B LLM
- (phase 2: resolve to subtechnique if applicable)
-      │
-      ▼
- { technique_id, name, confidence, rationale }
+ (rerank per chunk, then resolve subtechniques)
+         │
+         ▼
+ { text, matches[], best_match }
 ```
 
 Both models are downloaded automatically from HuggingFace Hub on first use.
@@ -79,16 +81,67 @@ ANNOTATED TEXT
 An IAB associated with other attacks in Belgium initiates a targeted attack against a remote office. The attack begins with a series of abnormal or undeliverable emails sent days before the attack...
 ```
 
-For automation, pass `--json` to receive structured output of all matches, complete with their character offsets and LLM rationales.
+For automation, pass `--json` to receive the same structured response shape used by the REST API and MCP JSON MCP tool.
 
 ```bash
 anghiari search --json "adversary dumped credentials from LSASS memory"
 ```
 
-Pass `--top` to control how many techniques are evaluated:
+The `--top-k` range is intentionally constrained to `1..5` to keep this focused on compact attack descriptions rather than very large text blobs.
 
 ```bash
-anghiari search --top 10 "used living-off-the-land binaries to blend in with normal admin activity"
+anghiari search --top-k 5 "used living-off-the-land binaries to blend in with normal admin activity"
+```
+
+If you want a faster scanner-only pass, disable reranking:
+
+```bash
+anghiari search --no-reranking -f examples/iab_vishing_campaign.txt
+```
+
+Tradeoff of `--no-reranking`:
+
+- faster
+- no LLM confidence calibration
+- no rationale generation
+- no subtechnique refinement
+- `confidence` is set to `UNKNOWN`
+- `rationale` is set to `Not provided.`
+
+Canonical JSON shape:
+
+```json
+{
+  "text": "adversary dumped credentials from LSASS memory",
+  "matches": [
+    {
+      "technique_id": "T1003.001",
+      "name": "OS Credential Dumping: LSASS Memory",
+      "tactic": "credential-access",
+      "score": 0.78,
+      "chunk_text": "adversary dumped credentials from LSASS memory",
+      "start": 0,
+      "end": 45,
+      "color_idx": 0,
+      "confidence": "HIGH",
+      "rationale": "The text explicitly describes dumping credentials from LSASS memory.",
+      "co_techniques": []
+    }
+  ],
+  "best_match": {
+    "technique_id": "T1003.001",
+    "name": "OS Credential Dumping: LSASS Memory",
+    "tactic": "credential-access",
+    "score": 0.78,
+    "chunk_text": "adversary dumped credentials from LSASS memory",
+    "start": 0,
+    "end": 45,
+    "color_idx": 0,
+    "confidence": "HIGH",
+    "rationale": "The text explicitly describes dumping credentials from LSASS memory.",
+    "co_techniques": []
+  }
+}
 ```
 
 ### REST API
@@ -104,12 +157,15 @@ anghiari api --reload           # dev mode
 ```bash
 curl -s -X POST http://localhost:8000/search \
   -H "Content-Type: application/json" \
-  -d '{"query": "PowerShell used to download and execute a remote payload"}' | jq .
+  -d '{"query": "PowerShell used to download and execute a remote payload", "top_k": 3}' | jq .
 ```
 
 ### MCP server
 
-For use with Claude Desktop or any MCP client:
+For use with Claude Desktop or any MCP client. The server exposes two tools:
+
+- `search_attack_technique_json`: returns the full structured JSON payload
+- `search_attack_technique_best`: returns a compact multi-line best answer with rationale
 
 ```bash
 anghiari mcp
@@ -130,7 +186,7 @@ Add to `claude_desktop_config.json`:
 
 ## Configuration
 
-On first run, `~/.config/anghiari/config.toml` is created with commented defaults. Edit it to change models, LLM parameters, prompts, cache location, and more.
+When you run the CLI for the first time, `~/.config/anghiari/config.toml` is created with commented defaults. Edit it to change models, LLM parameters, prompts, cache location, and more.
 
 Pass `--config <file>` before any subcommand to use a different config file:
 
@@ -147,13 +203,15 @@ The index and model weights are excluded from version control. After cloning, ru
 ```
 src/anghiari/
 ├── __init__.py      public API: search_technique, SearchResult, TechniqueMatch
+├── __about__.py     package version
 ├── cli.py           Typer CLI  ← anghiari search / index / api / mcp
 ├── config.py        config loader — reads ~/.config/anghiari/config.toml
-├── mapper.py        core pipeline: embed → search → LLM phase 1 → LLM phase 2
+├── mapper.py        shared backend for CLI / API / MCP search
 ├── indexer.py       STIX fetch, parse, embed, store in ChromaDB
 ├── embedder.py      Harrier wrapper: embed_query / embed_documents
+├── scanner.py       chunk extraction, scoring, overlap resolution, ANSI render
 ├── prompt.py        LLM prompt builders
-├── models.py        Pydantic types (incl. Confidence literal)
+├── models.py        dataclass result types, serializers, and LLM schemas
 ├── api.py           Litestar REST API
 └── mcp.py           FastMCP server
 ```

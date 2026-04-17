@@ -7,37 +7,59 @@ Run with:  anghiari mcp                                          (stdio, for Cla
 
 from fastmcp import FastMCP
 
-from .mapper import search_technique
+from .mapper import search_technique, validate_top_k
+from .models import search_result_to_dict
 
 mcp = FastMCP(
     name="Anghiari",
     instructions=(
         "Searches for and maps free-text descriptions of attack behaviors to MITRE ATT&CK "
         "Enterprise techniques. Uses local embeddings (Harrier) for semantic search and a "
-        "local LLM (Nemotron) for reasoning. Returns technique ID, name, confidence, "
-        "rationale, and top-k candidates."
+        "local LLM (Nemotron) for reasoning. Returns JSON containing the original text, "
+        "chunk-grounded matches, and the best match when available."
     ),
 )
 
 
 @mcp.tool()
-def search_attack_technique(
+def search_attack_technique_json(
     query: str, top_k: int | None = None, all_confidence: bool = False
 ) -> dict:
     """Search for the best-matching MITRE ATT&CK technique for a free-text attack description.
 
     Args:
         query: Natural-language description of the observed attack behavior.
-        top_k: Number of candidate techniques to retrieve before LLM reranking.
+        top_k: Maximum number of technique matches to return.
                Defaults to the value configured in config.toml (default: 5).
         all_confidence: If true, include matches with confidence below HIGH.
 
     Returns:
-        A dict with:
-          - best_match: { technique_id, name, confidence, rationale }
-          - candidates: top-k raw results with cosine similarity scores
+        A JSON-compatible dict matching the REST API response shape:
+          - text: original query text
+          - matches: chunk-grounded technique matches
+          - best_match: first entry in matches, when present
     """
-    return search_technique(query, top_k, all_confidence).model_dump()
+    return search_result_to_dict(
+        search_technique(query, validate_top_k(top_k), all_confidence)
+    )
+
+
+@mcp.tool()
+def search_attack_technique_best(
+    query: str, top_k: int | None = None, all_confidence: bool = False
+) -> str:
+    """Return a concise multi-line best answer for an LLM client."""
+    result = search_technique(query, validate_top_k(top_k), all_confidence)
+    if not result.best_match:
+        return "No matching technique found."
+
+    best = result.best_match
+    return (
+        f"{best.technique_id} {best.name} [{best.confidence}]\n"
+        f"Tactic: {best.tactic or 'unknown'}\n"
+        f"Reason: {best.rationale}\n"
+        f"Source: {best.chunk_text}"
+    )
 
 
 def run() -> None:
