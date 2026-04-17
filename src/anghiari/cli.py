@@ -54,17 +54,25 @@ def _run_llm_on_scan(query: str, scan_result: "ScanResult", top_n: int) -> "Scan
     # the actual evidence sentence rather than a generic technique description.
     candidates: list[dict] = []
     for m in scan_result.matches:
-        candidates.append({
-            "mitre_id": m.technique_id, "name": m.name,
-            "tactic": m.tactic, "description": m.chunk_text,
-            "score": round(m.score, 4),
-        })
+        candidates.append(
+            {
+                "mitre_id": m.technique_id,
+                "name": m.name,
+                "tactic": m.tactic,
+                "description": m.chunk_text,
+                "score": round(m.score, 4),
+            }
+        )
         for co in m.co_techniques:
-            candidates.append({
-                "mitre_id": co.technique_id, "name": co.name,
-                "tactic": co.tactic, "description": m.chunk_text,
-                "score": round(co.score, 4),
-            })
+            candidates.append(
+                {
+                    "mitre_id": co.technique_id,
+                    "name": co.name,
+                    "tactic": co.tactic,
+                    "description": m.chunk_text,
+                    "score": round(co.score, 4),
+                }
+            )
 
     # Phase 2: LLM picks and ranks from scan candidates.
     llm_matches = _llm_call_multi(
@@ -81,10 +89,15 @@ def _run_llm_on_scan(query: str, scan_result: "ScanResult", top_n: int) -> "Scan
     for match in llm_matches:
         subtechs = subtech_map.get(match.technique_id, [])
         if subtechs:
-            refined = _llm_call([
-                {"role": "system", "content": system},
-                {"role": "user", "content": build_subtechnique_prompt(query, match, subtechs)},
-            ])
+            refined = _llm_call(
+                [
+                    {"role": "system", "content": system},
+                    {
+                        "role": "user",
+                        "content": build_subtechnique_prompt(query, match, subtechs),
+                    },
+                ]
+            )
             resolved.append(refined)
         else:
             resolved.append(match)
@@ -109,22 +122,45 @@ def _run_llm_on_scan(query: str, scan_result: "ScanResult", top_n: int) -> "Scan
         if span in used_spans:
             continue  # deduplicate only if two LLM picks resolve to the exact same chunk
         used_spans.add(span)
+
         # Strip any co-technique that duplicates the new primary ID.
         clean_co = [c for c in chunk.co_techniques if c.technique_id != tm.technique_id]
-        merged.append(dc_replace(
-            chunk,
-            technique_id=tm.technique_id,
-            name=tm.name,
-            color_idx=i,
-            confidence=tm.confidence,
-            rationale=tm.rationale,
-            co_techniques=clean_co,
-        ))
+
+        # If the LLM promoted a co-technique to primary, demote the original primary to co-technique
+        if chunk.technique_id != tm.technique_id:
+            from .scanner import CoTechnique
+
+            clean_co.append(
+                CoTechnique(
+                    technique_id=chunk.technique_id,
+                    name=chunk.name,
+                    tactic=chunk.tactic,
+                    score=chunk.score,
+                )
+            )
+            # Sort co_techniques by score descending for cleaner output
+            clean_co.sort(key=lambda x: x.score, reverse=True)
+
+        merged.append(
+            dc_replace(
+                chunk,
+                technique_id=tm.technique_id,
+                name=tm.name,
+                color_idx=i,
+                confidence=tm.confidence,
+                rationale=tm.rationale,
+                co_techniques=clean_co,
+            )
+        )
 
     # Append scan matches the LLM didn't mention (cosine order, no LLM metadata).
     mentioned_parents = {m.technique_id.split(".")[0] for m in merged}
     for m in scan_result.matches:
-        if m.technique_id.split(".")[0] not in mentioned_parents:
+        span = (m.start, m.end)
+        if (
+            span not in used_spans
+            and m.technique_id.split(".")[0] not in mentioned_parents
+        ):
             merged.append(dc_replace(m, color_idx=len(merged)))
 
     return dc_replace(scan_result, matches=merged)
@@ -132,15 +168,25 @@ def _run_llm_on_scan(query: str, scan_result: "ScanResult", top_n: int) -> "Scan
 
 @app.command()
 def search(
-    text: Optional[str] = typer.Argument(None, help="Text to search (or use --file / stdin)"),
-    file: Optional[Path] = typer.Option(None, "--file", "-f", help="Read text from a file"),
-    top: int = typer.Option(8, "--top", "-n", help="Distinct technique matches to return"),
+    text: Optional[str] = typer.Argument(
+        None, help="Text to search (or use --file / stdin)"
+    ),
+    file: Optional[Path] = typer.Option(
+        None, "--file", "-f", help="Read text from a file"
+    ),
+    top: int = typer.Option(
+        8, "--top", "-n", help="Distinct technique matches to return"
+    ),
     no_llm: bool = typer.Option(
-        False, "--no-llm", is_flag=True,
+        False,
+        "--no-llm",
+        is_flag=True,
         help="Skip LLM reranking; use cosine scores only (faster)",
     ),
     json_output: bool = typer.Option(
-        False, "--json", is_flag=True,
+        False,
+        "--json",
+        is_flag=True,
         help="Output structured JSON instead of ANSI table",
     ),
 ) -> None:
@@ -168,11 +214,15 @@ def search(
 
     # Trim to requested top-N after optional LLM reorder.
     from dataclasses import replace
+
     scan_result = replace(scan_result, matches=scan_result.matches[:top])
 
     if json_output:
         import dataclasses
-        typer.echo(json.dumps([dataclasses.asdict(m) for m in scan_result.matches], indent=2))
+
+        typer.echo(
+            json.dumps([dataclasses.asdict(m) for m in scan_result.matches], indent=2)
+        )
     else:
         typer.echo(render(scan_result))
 
@@ -201,7 +251,9 @@ def index(
 def api(
     host: str = typer.Option("0.0.0.0", "--host", help="Bind host"),
     port: int = typer.Option(8000, "--port", "-p", help="Bind port"),
-    reload: bool = typer.Option(False, "--reload", help="Enable auto-reload (dev mode)"),
+    reload: bool = typer.Option(
+        False, "--reload", help="Enable auto-reload (dev mode)"
+    ),
 ) -> None:
     """[bold]Start[/bold] the Litestar REST API server."""
     import uvicorn
