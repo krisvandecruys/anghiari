@@ -54,134 +54,134 @@ def _callback(
 def _run_llm_on_scan(query: str, scan_result: "ScanResult", top_n: int) -> "ScanResult":
     """Overlay LLM confidence + rationale onto scan results.
 
-    Passes the scan candidates (primary + co-techniques) to the LLM reranker,
-    runs subtechnique resolution, then merges confidence/rationale back onto
-    the ChunkMatch objects using their technique_id as the lookup key.
+    For each chunk, passes its scan candidates (primary + co-techniques)
+    to the LLM reranker to select the single best technique for that specific chunk.
+    Then runs subtechnique resolution, merging confidence/rationale back onto the chunk.
     """
     from dataclasses import replace as dc_replace
 
     from .config import get_config
     from .mapper import _get_subtech_map, _llm_call, _llm_call_multi
     from .prompt import build_prompt, build_subtechnique_prompt
-    from .scanner import ChunkMatch
+    from .scanner import ChunkMatch, CoTechnique
 
     cfg = get_config()
     system = cfg.prompts.system
-    max_matches = min(cfg.search.max_matches, top_n)
 
-    # Build candidate list for the LLM — include primary + co-techniques.
-    # The triggering chunk_text acts as the description proxy, giving the LLM
-    # the actual evidence sentence rather than a generic technique description.
-    candidates: list[dict] = []
-    for m in scan_result.matches:
-        candidates.append(
-            {
-                "mitre_id": m.technique_id,
-                "name": m.name,
-                "tactic": m.tactic,
-                "description": m.chunk_text,
-                "score": round(m.score, 4),
-            }
+    merged: list[ChunkMatch] = []
+    subtech_map = _get_subtech_map()
+
+    # Only process up to top_n chunks. We fetched extra in scan_text just in case,
+    # but we only need to annotate the top_n chunks.
+    chunks_to_process = scan_result.matches[:top_n]
+
+    if chunks_to_process:
+        _log.info(
+            "Requesting LLM to evaluate %d text chunks individually...",
+            len(chunks_to_process),
         )
-        for co in m.co_techniques:
+
+    for i, chunk in enumerate(chunks_to_process):
+        candidates = [
+            {
+                "mitre_id": chunk.technique_id,
+                "name": chunk.name,
+                "tactic": chunk.tactic,
+                "description": chunk.chunk_text,
+                "score": round(chunk.score, 4),
+            }
+        ]
+        for co in chunk.co_techniques:
             candidates.append(
                 {
                     "mitre_id": co.technique_id,
                     "name": co.name,
                     "tactic": co.tactic,
-                    "description": m.chunk_text,
+                    "description": chunk.chunk_text,
                     "score": round(co.score, 4),
                 }
             )
 
-    # Phase 2: LLM picks and ranks from scan candidates.
-    _log.info(
-        "Requesting LLM to select best primary matches from %d candidates...",
-        len(candidates),
-    )
-    llm_matches = _llm_call_multi(
-        [
-            {"role": "system", "content": system},
-            {"role": "user", "content": build_prompt(query, candidates, max_matches)},
-        ],
-        max_matches,
-    )
+        # How many slots we still need to reach top_n, ensuring every remaining chunk gets at least 1
+        remaining_chunks = len(chunks_to_process) - 1 - i
+        slots_needed = max(1, (top_n - len(merged)) - remaining_chunks)
 
-    # Phase 3: subtechnique resolution (one extra LLM call per match that has subtechs).
-    subtech_map = _get_subtech_map()
-    resolved = []
-    _log.info("Resolving selected techniques to subtechniques (if applicable)...")
-    for match in llm_matches:
-        subtechs = subtech_map.get(match.technique_id, [])
-        if subtechs:
-            _log.info(
-                "Refining %s with %d subtechnique options...",
-                match.technique_id,
-                len(subtechs),
-            )
-            refined = _llm_call(
-                [
-                    {"role": "system", "content": system},
-                    {
-                        "role": "user",
-                        "content": build_subtechnique_prompt(query, match, subtechs),
-                    },
-                ]
-            )
-            resolved.append(refined)
-        else:
-            resolved.append(match)
+        _log.info(
+            "  Chunk %d/%d: %d candidates...",
+            i + 1,
+            len(chunks_to_process),
+            len(candidates),
+        )
 
-    # Build lookup: technique_id → ChunkMatch (primary or co-technique's parent).
-    scan_by_id: dict[str, ChunkMatch] = {m.technique_id: m for m in scan_result.matches}
-    for m in scan_result.matches:
-        for co in m.co_techniques:
-            scan_by_id.setdefault(co.technique_id, m)
+        # LLM picks the best techniques for this specific chunk
+        llm_matches = _llm_call_multi(
+            [
+                {"role": "system", "content": system},
+                {
+                    "role": "user",
+                    "content": build_prompt(chunk.chunk_text, candidates, slots_needed),
+                },
+            ],
+            slots_needed,
+        )
 
-    # Merge LLM results with scan provenance.
-    merged: list[ChunkMatch] = []
-    used_spans: set[tuple[int, int]] = set()  # deduplicate exact-same chunk only
-    for i, tm in enumerate(resolved):
-        chunk = scan_by_id.get(tm.technique_id)
-        if chunk is None:
-            # LLM refined to subtechnique (e.g. T1059 → T1059.001); try parent.
-            chunk = scan_by_id.get(tm.technique_id.split(".")[0])
-        if chunk is None:
-            continue  # no provenance — skip (prevents hallucinated IDs appearing)
-        span = (chunk.start, chunk.end)
-        if span in used_spans:
-            continue  # deduplicate only if two LLM picks resolve to the exact same chunk
-        used_spans.add(span)
+        if not llm_matches:
+            # Fallback if LLM returns empty: keep the cosine primary match, but no confidence/rationale
+            merged.append(dc_replace(chunk, color_idx=len(merged)))
+            continue
 
-        # Strip any co-technique that duplicates the new primary ID.
-        clean_co = [c for c in chunk.co_techniques if c.technique_id != tm.technique_id]
+        selected_ids = {tm.technique_id for tm in llm_matches}
 
-        # If the LLM promoted a co-technique to primary, demote the original primary to co-technique
-        if chunk.technique_id != tm.technique_id:
-            from .scanner import CoTechnique
+        # Any candidate not selected by the LLM becomes a co-technique for the first match
+        unselected = []
+        for c in candidates:
+            if c["mitre_id"] not in selected_ids:
+                unselected.append(
+                    CoTechnique(
+                        technique_id=str(c["mitre_id"]),
+                        name=str(c["name"]),
+                        tactic=str(c["tactic"]),
+                        score=float(c["score"]),
+                    )
+                )
+        unselected.sort(key=lambda x: x.score, reverse=True)
 
-            clean_co.append(
-                CoTechnique(
-                    technique_id=chunk.technique_id,
-                    name=chunk.name,
-                    tactic=chunk.tactic,
-                    score=chunk.score,
+        for j, tm in enumerate(llm_matches):
+            # Remember original ID before subtechnique resolution
+            orig_id = tm.technique_id
+
+            # Subtechnique resolution
+            subtechs = subtech_map.get(tm.technique_id, [])
+            if subtechs:
+                _log.info("  Refining %s to subtechnique...", tm.technique_id)
+                tm = _llm_call(
+                    [
+                        {"role": "system", "content": system},
+                        {
+                            "role": "user",
+                            "content": build_subtechnique_prompt(
+                                chunk.chunk_text, tm, subtechs
+                            ),
+                        },
+                    ]
+                )
+
+            # Recover original tactic and score for this technique if possible
+            orig = next((c for c in candidates if c["mitre_id"] == orig_id), None)
+
+            merged.append(
+                dc_replace(
+                    chunk,
+                    technique_id=tm.technique_id,
+                    name=tm.name,
+                    tactic=str(orig["tactic"]) if orig else chunk.tactic,
+                    score=float(orig["score"]) if orig else chunk.score,
+                    color_idx=len(merged),
+                    confidence=tm.confidence,
+                    rationale=tm.rationale,
+                    co_techniques=unselected if j == 0 else [],
                 )
             )
-            # Sort co_techniques by score descending for cleaner output
-            clean_co.sort(key=lambda x: x.score, reverse=True)
-
-        merged.append(
-            dc_replace(
-                chunk,
-                technique_id=tm.technique_id,
-                name=tm.name,
-                color_idx=i,
-                confidence=tm.confidence,
-                rationale=tm.rationale,
-                co_techniques=clean_co,
-            )
-        )
 
     return dc_replace(scan_result, matches=merged)
 

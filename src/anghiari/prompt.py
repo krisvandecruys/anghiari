@@ -13,8 +13,7 @@ _JSON_SCHEMA_SINGLE = (
 
 _JSON_SCHEMA_MULTI_TMPL = (
     '{{"matches": [{{"technique_id": "T...", "name": "...", "confidence": "HIGH", "rationale": "..."}}, ...]}}\n'
-    "Return between 1 and {max_matches} entries — only techniques genuinely relevant to the description, "
-    "best-first. If one technique clearly dominates, return only that one.\n"
+    "Return up to {max_matches} entries. If asked for multiple, evaluate the top candidates even if one dominates, assigning lower confidence (e.g. GUESS or LOW) to the weaker ones.\n"
     "confidence must be exactly one of (ordered lowest to highest): GUESS < LOW < MEDIUM < HIGH < CERTAIN\n"
     "  GUESS = weak signal, speculative match;  CERTAIN = definitively matches, near-unmistakable"
 )
@@ -22,6 +21,7 @@ _JSON_SCHEMA_MULTI_TMPL = (
 
 def build_prompt(query: str, candidates: list[dict], max_matches: int = 1) -> str:
     from .config import get_config
+
     trunc = get_config().prompts.description_truncate_phase1
     candidate_block = "\n".join(
         f"{i + 1}. [{c['mitre_id']}] {c['name']} (tactic: {c.get('tactic', 'unknown')})\n"
@@ -42,6 +42,7 @@ def build_subtechnique_prompt(
     subtechs: list[dict],
 ) -> str:
     from .config import get_config
+
     trunc = get_config().prompts.description_truncate_phase2
     subtech_block = "\n".join(
         f"{i + 1}. [{s['mitre_id']}] {s['name']}\n   {s['description'][:trunc]}"
