@@ -1,7 +1,7 @@
 """
 Configuration loader for Anghiari.
 
-On first run, creates ~/.config/anghiari/config.toml with commented defaults.
+The CLI can create ~/.config/anghiari/config.toml with commented defaults.
 Pass --config <path> on the CLI to use a different file.
 """
 
@@ -48,7 +48,6 @@ temperature = 0.1
 
 [search]
 top_k = 5
-max_matches = 3   # LLM returns 1–N based on quality; this is the ceiling
 
 [api]
 host = "0.0.0.0"
@@ -88,7 +87,6 @@ class LLMConfig:
 @dataclass
 class SearchConfig:
     top_k: int = 5
-    max_matches: int = 3
 
 
 @dataclass
@@ -159,7 +157,6 @@ def _build_config(data: dict) -> Config:
         ),
         search=SearchConfig(
             top_k=d_search.get("top_k", defaults.search.top_k),
-            max_matches=d_search.get("max_matches", defaults.search.max_matches),
         ),
         api=APIConfig(
             host=d_api.get("host", defaults.api.host),
@@ -202,11 +199,12 @@ def set_config(cfg: Config) -> None:
     _config = cfg
 
 
-def load_config(path: Path | None = None) -> Config:
+def load_config(path: Path | None = None, *, create_default: bool = False) -> Config:
     """Load config from *path*, or from the default location.
 
-    If *path* is None and the default config file doesn't exist, it is created
-    with commented defaults and pure-Python defaults are returned.
+    If *path* is None and the default config file doesn't exist, pure-Python
+    defaults are returned unless *create_default* is true, in which case the
+    default config file is written first.
 
     Raises FileNotFoundError if an explicit *path* is given but doesn't exist.
     """
@@ -217,8 +215,9 @@ def load_config(path: Path | None = None) -> Config:
             return _build_config(tomllib.load(f))
 
     if not _CONFIG_FILE.exists():
-        _CONFIG_DIR.mkdir(parents=True, exist_ok=True)
-        _CONFIG_FILE.write_text(_DEFAULT_TOML)
+        if create_default:
+            _CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+            _CONFIG_FILE.write_text(_DEFAULT_TOML)
         return Config()
 
     with _CONFIG_FILE.open("rb") as f:

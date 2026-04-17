@@ -50,10 +50,15 @@ def embed_query(text: str) -> list[float]:
 
 def embed_documents(
     texts: list[str],
-    batch_size: int = 32,
+    batch_size: int | None = None,
     show_progress: bool = False,
 ) -> np.ndarray:
     """Embed a list of document strings. Returns float32 array of shape (N, 1024)."""
+    if batch_size is None:
+        from .config import get_config
+
+        batch_size = get_config().embedder.batch_size
+
     return _get_model().encode(
         texts,
         normalize_embeddings=True,

@@ -13,6 +13,7 @@ import uvicorn
 from litestar import Litestar, post
 from litestar.openapi import OpenAPIConfig
 
+from .__about__ import __version__
 from .mapper import search_technique
 from .models import SearchResult
 
@@ -34,7 +35,7 @@ app = Litestar(
     route_handlers=[search_handler],
     openapi_config=OpenAPIConfig(
         title="Anghiari",
-        version="0.1.0",
+        version=__version__,
         description="Maps free-text attack descriptions to MITRE ATT&CK techniques using local ML.",
     ),
 )

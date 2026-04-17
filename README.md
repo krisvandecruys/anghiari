@@ -4,29 +4,31 @@
 
 [![Battle of Anghiari](https://upload.wikimedia.org/wikipedia/commons/c/c4/Peter_Paul_Ruben%27s_copy_of_the_lost_Battle_of_Anghiari.jpg)](https://commons.wikimedia.org/wiki/File:Peter_Paul_Ruben%27s_copy_of_the_lost_Battle_of_Anghiari.jpg)
 
-Anghiari searches free-text descriptions of attack behaviors against [MITRE ATT&CK](https://attack.mitre.org/) Enterprise techniques. Give it a sentence about what an attacker did; it returns the technique ID, a verbal confidence level, and the reasoning behind the match.
+Anghiari searches free-text descriptions of attack behaviors against [MITRE ATT&CK](https://attack.mitre.org/) Enterprise techniques. Give it a sentence about what an attacker did; it returns chunk-grounded matches with technique IDs, confidence, rationale, and source offsets.
 
 Everything runs 100% locally. No API keys. No external calls at query time.
 
 ## How it works
 
 ```
-your description
-      │
-      ▼
+ your description or report
+         │
+         ▼
+ multi-level chunking      paragraphs, sentences, overlaps, quotes
+         │
+         ▼
  Harrier embedder          microsoft/harrier-oss-v1-0.6b
- (semantic search)    ──▶  ChromaDB (local)  ──▶  top-5 candidates
-      │
-      ▼
+ (chunk search)       ──▶  ChromaDB (local)  ──▶  best chunk per technique
+         │
+         ▼
+ greedy span selection     distinct source spans + co-firing techniques
+         │
+         ▼
  Nemotron 4B LLM           nvidia/NVIDIA-Nemotron-3-Nano-4B-GGUF
- (phase 1: pick best technique from candidates)
-      │
-      ▼
- Nemotron 4B LLM
- (phase 2: resolve to subtechnique if applicable)
-      │
-      ▼
- { technique_id, name, confidence, rationale }
+ (rerank per chunk, then resolve subtechniques)
+         │
+         ▼
+ { text, matches[], best_match }
 ```
 
 Both models are downloaded automatically from HuggingFace Hub on first use.
@@ -79,7 +81,7 @@ ANNOTATED TEXT
 An IAB associated with other attacks in Belgium initiates a targeted attack against a remote office. The attack begins with a series of abnormal or undeliverable emails sent days before the attack...
 ```
 
-For automation, pass `--json` to receive structured output of all matches, complete with their character offsets and LLM rationales.
+For automation, pass `--json` to receive the same structured response shape used by the REST API and MCP server.
 
 ```bash
 anghiari search --json "adversary dumped credentials from LSASS memory"
@@ -130,7 +132,7 @@ Add to `claude_desktop_config.json`:
 
 ## Configuration
 
-On first run, `~/.config/anghiari/config.toml` is created with commented defaults. Edit it to change models, LLM parameters, prompts, cache location, and more.
+When you run the CLI for the first time, `~/.config/anghiari/config.toml` is created with commented defaults. Edit it to change models, LLM parameters, prompts, cache location, and more.
 
 Pass `--config <file>` before any subcommand to use a different config file:
 
@@ -147,11 +149,13 @@ The index and model weights are excluded from version control. After cloning, ru
 ```
 src/anghiari/
 ├── __init__.py      public API: search_technique, SearchResult, TechniqueMatch
+├── __about__.py     package version
 ├── cli.py           Typer CLI  ← anghiari search / index / api / mcp
 ├── config.py        config loader — reads ~/.config/anghiari/config.toml
-├── mapper.py        core pipeline: embed → search → LLM phase 1 → LLM phase 2
+├── mapper.py        shared backend for CLI / API / MCP search
 ├── indexer.py       STIX fetch, parse, embed, store in ChromaDB
 ├── embedder.py      Harrier wrapper: embed_query / embed_documents
+├── scanner.py       chunk extraction, scoring, overlap resolution, ANSI render
 ├── prompt.py        LLM prompt builders
 ├── models.py        Pydantic types (incl. Confidence literal)
 ├── api.py           Litestar REST API

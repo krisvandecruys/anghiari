@@ -3,7 +3,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from .models import TechniqueMatch
+    from .models import LLMTechniqueMatch, TechniqueMatch
 
 _JSON_SCHEMA_SINGLE = (
     '{"technique_id": "T...", "name": "...", "confidence": "HIGH", "rationale": "..."}\n'
@@ -38,7 +38,7 @@ def build_prompt(query: str, candidates: list[dict], max_matches: int = 1) -> st
 
 def build_subtechnique_prompt(
     query: str,
-    parent: "TechniqueMatch",
+    parent: "TechniqueMatch | LLMTechniqueMatch",
     subtechs: list[dict],
 ) -> str:
     from .config import get_config

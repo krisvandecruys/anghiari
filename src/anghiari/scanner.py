@@ -46,6 +46,7 @@ class CoTechnique:
 
     technique_id: str
     name: str
+    description: str
     tactic: str
     score: float
 
@@ -54,6 +55,7 @@ class CoTechnique:
 class ChunkMatch:
     technique_id: str
     name: str
+    description: str
     tactic: str
     score: float  # cosine similarity 0–1
     chunk_text: str  # sentence window that best matched this technique
@@ -288,6 +290,7 @@ def scan_text(text: str, top_n: int = 8) -> ScanResult:
                     ChunkMatch(
                         technique_id=tech_id,
                         name=meta["name"],
+                        description=meta.get("description", ""),
                         tactic=meta.get("tactic", ""),
                         score=tech_score,
                         chunk_text=chunks[ci][0],
@@ -310,6 +313,7 @@ def scan_text(text: str, top_n: int = 8) -> ScanResult:
                     seen_ids.discard(primary.technique_id)
                     primary.technique_id = tech_id
                     primary.name = meta["name"]
+                    primary.description = meta.get("description", "")
                     primary.tactic = meta.get("tactic", "")
                     primary.score = tech_score
                     seen_ids.add(tech_id)
@@ -323,6 +327,7 @@ def scan_text(text: str, top_n: int = 8) -> ScanResult:
                     CoTechnique(
                         technique_id=tech_id,
                         name=meta["name"],
+                        description=meta.get("description", ""),
                         tactic=meta.get("tactic", ""),
                         score=tech_score,
                     )
@@ -430,7 +435,9 @@ if __name__ == "__main__":
     args = p.parse_args()
 
     if args.file:
-        blob = open(args.file).read()
+        from pathlib import Path
+
+        blob = Path(args.file).read_text()
     elif args.text:
         blob = args.text
     else:

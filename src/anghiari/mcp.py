@@ -14,8 +14,8 @@ mcp = FastMCP(
     instructions=(
         "Searches for and maps free-text descriptions of attack behaviors to MITRE ATT&CK "
         "Enterprise techniques. Uses local embeddings (Harrier) for semantic search and a "
-        "local LLM (Nemotron) for reasoning. Returns technique ID, name, confidence, "
-        "rationale, and top-k candidates."
+        "local LLM (Nemotron) for reasoning. Returns JSON containing the original text, "
+        "chunk-grounded matches, and the best match when available."
     ),
 )
 
@@ -28,14 +28,15 @@ def search_attack_technique(
 
     Args:
         query: Natural-language description of the observed attack behavior.
-        top_k: Number of candidate techniques to retrieve before LLM reranking.
+        top_k: Maximum number of technique matches to return.
                Defaults to the value configured in config.toml (default: 5).
         all_confidence: If true, include matches with confidence below HIGH.
 
     Returns:
-        A dict with:
-          - best_match: { technique_id, name, confidence, rationale }
-          - candidates: top-k raw results with cosine similarity scores
+        A JSON-compatible dict matching the REST API response shape:
+          - text: original query text
+          - matches: chunk-grounded technique matches
+          - best_match: first entry in matches, when present
     """
     return search_technique(query, top_k, all_confidence).model_dump()
 
