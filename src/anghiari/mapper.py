@@ -42,7 +42,7 @@ def _quiet_stderr():
         os.close(saved)
 
 from .embedder import embed_query
-from .models import SearchResult, TechniqueMatch
+from .models import LLMMatchList, SearchResult, TechniqueMatch
 from .prompt import build_prompt, build_subtechnique_prompt
 
 COLLECTION_NAME = "mitre_techniques"
@@ -112,12 +112,26 @@ def _llm_call(messages: list[dict]) -> TechniqueMatch:
     return TechniqueMatch.model_validate_json(raw)
 
 
+def _llm_call_multi(messages: list[dict], max_matches: int) -> list[TechniqueMatch]:
+    from .config import get_config
+    llm_cfg = get_config().llm
+    response = _get_llm().create_chat_completion(
+        messages=messages,
+        response_format={"type": "json_object"},
+        max_tokens=llm_cfg.max_tokens * max_matches,
+        temperature=llm_cfg.temperature,
+    )
+    raw = response["choices"][0]["message"]["content"]
+    return LLMMatchList.model_validate_json(raw).matches
+
+
 def search_technique(query: str, top_k: int | None = None) -> SearchResult:
-    """Map a free-text attack description to the best-matching MITRE ATT&CK technique."""
+    """Map a free-text attack description to one or more MITRE ATT&CK techniques."""
     from .config import get_config
     cfg = get_config()
     if top_k is None:
         top_k = cfg.search.top_k
+    max_matches = min(cfg.search.max_matches, top_k)
     system = cfg.prompts.system
 
     # ── Phase 0: embed the query ─────────────────────────────────────────────
@@ -130,26 +144,29 @@ def search_technique(query: str, top_k: int | None = None) -> SearchResult:
         for meta, dist in zip(results["metadatas"][0], results["distances"][0])
     ]
 
-    # ── Phase 2: LLM picks best from top-k ──────────────────────────────────
-    best = _llm_call(
+    # ── Phase 2: LLM picks 1–max_matches from top-k ─────────────────────────
+    matches = _llm_call_multi(
         [
             {"role": "system", "content": system},
-            {"role": "user", "content": build_prompt(query, candidates)},
-        ]
+            {"role": "user", "content": build_prompt(query, candidates, max_matches)},
+        ],
+        max_matches,
     )
 
-    # ── Phase 3: subtechnique resolution ────────────────────────────────────
-    subtechs = _get_subtech_map().get(best.technique_id, [])
-    if subtechs:
-        refined = _llm_call(
-            [
-                {"role": "system", "content": system},
-                {
-                    "role": "user",
-                    "content": build_subtechnique_prompt(query, best, subtechs),
-                },
-            ]
-        )
-        best = refined
+    # ── Phase 3: subtechnique resolution for each match ─────────────────────
+    subtech_map = _get_subtech_map()
+    resolved = []
+    for match in matches:
+        subtechs = subtech_map.get(match.technique_id, [])
+        if subtechs:
+            refined = _llm_call(
+                [
+                    {"role": "system", "content": system},
+                    {"role": "user", "content": build_subtechnique_prompt(query, match, subtechs)},
+                ]
+            )
+            resolved.append(refined)
+        else:
+            resolved.append(match)
 
-    return SearchResult(best_match=best, candidates=candidates)
+    return SearchResult(matches=resolved, candidates=candidates)

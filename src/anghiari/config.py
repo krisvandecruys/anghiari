@@ -17,7 +17,8 @@ _DEFAULT_CACHE_DIR = Path("~/.cache/anghiari").expanduser()
 
 _DEFAULT_SYSTEM_PROMPT = (
     "You are a MITRE ATT&CK expert. Given an attack description and candidate techniques, "
-    "identify the single best match. Respond ONLY with valid JSON — no markdown, no extra text. "
+    "identify the most relevant matching technique(s) — return only techniques that genuinely fit. "
+    "Respond ONLY with valid JSON — no markdown, no extra text. "
     "Express confidence as one of (ordered lowest to highest): GUESS < LOW < MEDIUM < HIGH < CERTAIN. "
     "GUESS = weak signal, speculative match; CERTAIN = definitively matches, near-unmistakable."
 )
@@ -47,6 +48,7 @@ temperature = 0.1
 
 [search]
 top_k = 5
+max_matches = 3   # LLM returns 1–N based on quality; this is the ceiling
 
 [api]
 host = "0.0.0.0"
@@ -57,7 +59,7 @@ url = "https://raw.githubusercontent.com/mitre/cti/master/enterprise-attack/ente
 fetch_timeout = 60
 
 [prompts]
-system = "You are a MITRE ATT&CK expert. Given an attack description and candidate techniques, identify the single best match. Respond ONLY with valid JSON — no markdown, no extra text. Express confidence as one of (ordered lowest to highest): GUESS < LOW < MEDIUM < HIGH < CERTAIN. GUESS = weak signal, speculative match; CERTAIN = definitively matches, near-unmistakable."
+system = "You are a MITRE ATT&CK expert. Given an attack description and candidate techniques, identify the most relevant matching technique(s) — return only techniques that genuinely fit. Respond ONLY with valid JSON — no markdown, no extra text. Express confidence as one of (ordered lowest to highest): GUESS < LOW < MEDIUM < HIGH < CERTAIN. GUESS = weak signal, speculative match; CERTAIN = definitively matches, near-unmistakable."
 description_truncate_phase1 = 300
 description_truncate_phase2 = 400
 """
@@ -84,6 +86,7 @@ class LLMConfig:
 @dataclass
 class SearchConfig:
     top_k: int = 5
+    max_matches: int = 3
 
 
 @dataclass
@@ -154,6 +157,7 @@ def _build_config(data: dict) -> Config:
         ),
         search=SearchConfig(
             top_k=d_search.get("top_k", defaults.search.top_k),
+            max_matches=d_search.get("max_matches", defaults.search.max_matches),
         ),
         api=APIConfig(
             host=d_api.get("host", defaults.api.host),

@@ -5,14 +5,22 @@ from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     from .models import TechniqueMatch
 
-_JSON_SCHEMA = (
+_JSON_SCHEMA_SINGLE = (
     '{"technique_id": "T...", "name": "...", "confidence": "HIGH", "rationale": "..."}\n'
     "confidence must be exactly one of (ordered lowest to highest): GUESS < LOW < MEDIUM < HIGH < CERTAIN\n"
     "  GUESS = weak signal, speculative match;  CERTAIN = definitively matches, near-unmistakable"
 )
 
+_JSON_SCHEMA_MULTI_TMPL = (
+    '{{"matches": [{{"technique_id": "T...", "name": "...", "confidence": "HIGH", "rationale": "..."}}, ...]}}\n'
+    "Return between 1 and {max_matches} entries — only techniques genuinely relevant to the description, "
+    "best-first. If one technique clearly dominates, return only that one.\n"
+    "confidence must be exactly one of (ordered lowest to highest): GUESS < LOW < MEDIUM < HIGH < CERTAIN\n"
+    "  GUESS = weak signal, speculative match;  CERTAIN = definitively matches, near-unmistakable"
+)
 
-def build_prompt(query: str, candidates: list[dict]) -> str:
+
+def build_prompt(query: str, candidates: list[dict], max_matches: int = 1) -> str:
     from .config import get_config
     trunc = get_config().prompts.description_truncate_phase1
     candidate_block = "\n".join(
@@ -20,10 +28,11 @@ def build_prompt(query: str, candidates: list[dict]) -> str:
         f"   {c['description'][:trunc]}"
         for i, c in enumerate(candidates)
     )
+    schema = _JSON_SCHEMA_MULTI_TMPL.format(max_matches=max_matches)
     return (
         f"Attack description: {query}\n\n"
         f"Candidate techniques:\n{candidate_block}\n\n"
-        f"Return JSON with this exact schema:\n{_JSON_SCHEMA}"
+        f"Return JSON with this exact schema:\n{schema}"
     )
 
 
@@ -44,5 +53,5 @@ def build_subtechnique_prompt(
         f"Now pick the most specific subtechnique below, or return the parent ID "
         f"if none of them fit better:\n\n"
         f"{subtech_block}\n\n"
-        f"Return JSON with this exact schema:\n{_JSON_SCHEMA}"
+        f"Return JSON with this exact schema:\n{_JSON_SCHEMA_SINGLE}"
     )

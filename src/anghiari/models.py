@@ -1,6 +1,6 @@
 from typing import Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, computed_field
 
 Confidence = Literal["GUESS", "LOW", "MEDIUM", "HIGH", "CERTAIN"]
 
@@ -12,6 +12,15 @@ class TechniqueMatch(BaseModel):
     rationale: str = Field(description="Explanation of why this technique matches the description")
 
 
+class LLMMatchList(BaseModel):
+    matches: list[TechniqueMatch]
+
+
 class SearchResult(BaseModel):
-    best_match: TechniqueMatch
+    matches: list[TechniqueMatch]
     candidates: list[dict] = Field(description="Top-k raw candidates with cosine similarity scores")
+
+    @computed_field
+    @property
+    def best_match(self) -> TechniqueMatch:
+        return self.matches[0]

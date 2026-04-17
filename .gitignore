@@ -27,3 +27,6 @@ wheels/
 .idea/
 .vscode/
 *.swp
+
+# Ssshh secrets!
+.env
