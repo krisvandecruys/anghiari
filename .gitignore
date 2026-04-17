@@ -32,3 +32,9 @@ wheels/
 .env
 .remember
 
+
+# AI Agent Instructions
+AGENTS.md
+CLAUDE.md
+.cursorrules
+.clinerules
