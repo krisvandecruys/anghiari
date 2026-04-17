@@ -14,6 +14,10 @@ import warnings
 import chromadb
 from llama_cpp import Llama
 
+from .embedder import embed_query
+from .models import LLMMatchList, SearchResult, TechniqueMatch
+from .prompt import build_prompt, build_subtechnique_prompt
+
 # llama-cpp-python passes a deprecated kwarg to hf_hub_download — not our bug, filter it.
 warnings.filterwarnings(
     "ignore",
@@ -41,9 +45,6 @@ def _quiet_stderr():
         os.dup2(saved, 2)
         os.close(saved)
 
-from .embedder import embed_query
-from .models import LLMMatchList, SearchResult, TechniqueMatch
-from .prompt import build_prompt, build_subtechnique_prompt
 
 COLLECTION_NAME = "mitre_techniques"
 
@@ -57,6 +58,7 @@ def _get_collection():
     global _collection
     if _collection is None:
         from .config import get_config
+
         chroma_dir = get_config().chroma_dir
         if not chroma_dir.exists():
             raise RuntimeError(
@@ -71,6 +73,7 @@ def _get_llm() -> Llama:
     global _llm
     if _llm is None:
         from .config import get_config
+
         llm_cfg = get_config().llm
         _log.info("Loading LLM (%s / %s)", llm_cfg.repo_id, llm_cfg.filename)
         with _quiet_stderr():
@@ -89,6 +92,7 @@ def _get_subtech_map() -> dict[str, list[dict]]:
     global _subtech_map
     if _subtech_map is None:
         from .config import get_config
+
         subtech_map_file = get_config().subtech_map
         if not subtech_map_file.exists():
             raise RuntimeError(
@@ -101,6 +105,7 @@ def _get_subtech_map() -> dict[str, list[dict]]:
 
 def _llm_call(messages: list[dict]) -> TechniqueMatch:
     from .config import get_config
+
     llm_cfg = get_config().llm
     response = _get_llm().create_chat_completion(
         messages=messages,
@@ -114,6 +119,7 @@ def _llm_call(messages: list[dict]) -> TechniqueMatch:
 
 def _llm_call_multi(messages: list[dict], max_matches: int) -> list[TechniqueMatch]:
     from .config import get_config
+
     llm_cfg = get_config().llm
     response = _get_llm().create_chat_completion(
         messages=messages,
@@ -128,6 +134,7 @@ def _llm_call_multi(messages: list[dict], max_matches: int) -> list[TechniqueMat
 def search_technique(query: str, top_k: int | None = None) -> SearchResult:
     """Map a free-text attack description to one or more MITRE ATT&CK techniques."""
     from .config import get_config
+
     cfg = get_config()
     if top_k is None:
         top_k = cfg.search.top_k
@@ -162,7 +169,10 @@ def search_technique(query: str, top_k: int | None = None) -> SearchResult:
             refined = _llm_call(
                 [
                     {"role": "system", "content": system},
-                    {"role": "user", "content": build_subtechnique_prompt(query, match, subtechs)},
+                    {
+                        "role": "user",
+                        "content": build_subtechnique_prompt(query, match, subtechs),
+                    },
                 ]
             )
             resolved.append(refined)

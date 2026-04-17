@@ -90,6 +90,7 @@ def _get_tech_matrix() -> tuple[np.ndarray, list[dict]]:
 # ── Span and technique helpers ────────────────────────────────────────────────
 
 _CO_FIRE_THRESHOLD = 0.05  # max score gap vs primary to qualify as a co-fire
+_MAX_CO_FIRES = 4  # max number of co-techniques to attach to a primary match
 
 
 def _span_overlaps(
@@ -304,7 +305,10 @@ def scan_text(text: str, top_n: int = 8) -> ScanResult:
                     primary.score = tech_score
                     seen_ids.add(tech_id)
                 # else: primary is already subtechnique or same specificity → skip.
-            elif score_gap <= _CO_FIRE_THRESHOLD:
+            elif (
+                score_gap <= _CO_FIRE_THRESHOLD
+                and len(primary.co_techniques) < _MAX_CO_FIRES
+            ):
                 # Genuinely distinct technique, nearly as strong → co-mention.
                 primary.co_techniques.append(
                     CoTechnique(

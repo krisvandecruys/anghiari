@@ -34,7 +34,7 @@ cache_dir = "~/.cache/anghiari"
 
 [embedder]
 model_id = "microsoft/harrier-oss-v1-0.6b"
-query_prefix = "Retrieve semantically similar text: "
+query_prefix = "Instruct: Retrieve the relevant MITRE ATT&CK technique.\\nQuery: "
 batch_size = 32
 
 [llm]
@@ -68,7 +68,9 @@ description_truncate_phase2 = 400
 @dataclass
 class EmbedderConfig:
     model_id: str = "microsoft/harrier-oss-v1-0.6b"
-    query_prefix: str = "Retrieve semantically similar text: "
+    query_prefix: str = (
+        "Instruct: Retrieve the relevant MITRE ATT&CK technique.\nQuery: "
+    )
     batch_size: int = 32
 
 
@@ -170,10 +172,12 @@ def _build_config(data: dict) -> Config:
         prompts=PromptsConfig(
             system=d_prompts.get("system", defaults.prompts.system),
             description_truncate_phase1=d_prompts.get(
-                "description_truncate_phase1", defaults.prompts.description_truncate_phase1
+                "description_truncate_phase1",
+                defaults.prompts.description_truncate_phase1,
             ),
             description_truncate_phase2=d_prompts.get(
-                "description_truncate_phase2", defaults.prompts.description_truncate_phase2
+                "description_truncate_phase2",
+                defaults.prompts.description_truncate_phase2,
             ),
         ),
     )
