@@ -30,3 +30,5 @@ wheels/
 
 # Ssshh secrets!
 .env
+.remember
+
