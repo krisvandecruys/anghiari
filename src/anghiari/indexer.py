@@ -19,6 +19,7 @@ COLLECTION_NAME = "mitre_techniques"
 
 def fetch_stix() -> dict:
     from .config import get_config
+
     cfg = get_config()
     if cfg.stix_cache.exists():
         print(f"Using cached STIX data from {cfg.stix_cache}")
@@ -57,13 +58,25 @@ def extract_techniques(bundle: dict) -> list[dict]:
         if len(description) > 1000:
             description = description[:1000].rsplit(" ", 1)[0] + "..."
 
-        techniques.append({
-            "mitre_id": mitre_id,
-            "name": obj.get("name", ""),
-            "description": description,
-            "tactic": tactic,
-            "is_subtechnique": bool(obj.get("x_mitre_is_subtechnique", False)),
-        })
+        techniques.append(
+            {
+                "mitre_id": mitre_id,
+                "name": obj.get("name", ""),
+                "description": description,
+                "tactic": tactic,
+                "is_subtechnique": bool(obj.get("x_mitre_is_subtechnique", False)),
+            }
+        )
+
+    # Prefix subtechnique names with their parent name (e.g. "Phishing: Spearphishing Voice")
+    parent_names = {
+        t["mitre_id"]: t["name"] for t in techniques if not t["is_subtechnique"]
+    }
+    for t in techniques:
+        if t["is_subtechnique"]:
+            parent_id = t["mitre_id"].split(".")[0]
+            if parent_name := parent_names.get(parent_id):
+                t["name"] = f"{parent_name}: {t['name']}"
 
     print(f"Parsed {len(techniques)} techniques (including subtechniques)")
     return techniques
@@ -80,6 +93,7 @@ def build_subtechnique_map(techniques: list[dict]) -> dict[str, list[dict]]:
 
 def embed_and_index(techniques: list[dict]) -> None:
     from .config import get_config
+
     chroma_dir = get_config().chroma_dir
     texts = [f"{t['name']}. {t['description']}" for t in techniques]
 
@@ -109,6 +123,7 @@ def embed_and_index(techniques: list[dict]) -> None:
 
 def main() -> None:
     from .config import get_config
+
     cfg = get_config()
     cfg.cache_dir.mkdir(parents=True, exist_ok=True)
 

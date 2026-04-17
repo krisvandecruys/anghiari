@@ -153,16 +153,6 @@ def _run_llm_on_scan(query: str, scan_result: "ScanResult", top_n: int) -> "Scan
             )
         )
 
-    # Append scan matches the LLM didn't mention (cosine order, no LLM metadata).
-    mentioned_parents = {m.technique_id.split(".")[0] for m in merged}
-    for m in scan_result.matches:
-        span = (m.start, m.end)
-        if (
-            span not in used_spans
-            and m.technique_id.split(".")[0] not in mentioned_parents
-        ):
-            merged.append(dc_replace(m, color_idx=len(merged)))
-
     return dc_replace(scan_result, matches=merged)
 
 

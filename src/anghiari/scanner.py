@@ -400,17 +400,6 @@ def render(result: ScanResult) -> str:
     lines.append("".join(buf))
     lines.append(_LINE)
 
-    # Legend — primary technique + any co-techniques share the same [N] entry.
-    for m in result.matches:
-        c = _color(m.color_idx)
-        co_str = "".join(
-            f"\n         {c}+ {co.technique_id}  {co.name}{_RESET}"
-            for co in m.co_techniques
-        )
-        lines.append(
-            f"  {c}[{m.color_idx + 1}]{_RESET}  {m.technique_id}  {m.name}{co_str}"
-        )
-
     return "\n".join(lines)
 
 

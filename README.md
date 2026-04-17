@@ -58,26 +58,35 @@ Add `--force` to re-download fresh STIX data.
 
 ### Search
 
-```bash
-anghiari search "adversary dumped credentials from LSASS memory"
-```
-
-```json
-{
-  "best_match": {
-    "technique_id": "T1003.001",
-    "name": "OS Credential Dumping: LSASS Memory",
-    "confidence": "CERTAIN",
-    "rationale": "The description directly references LSASS memory, the primary target of OS credential dumping via tools like Mimikatz or ProcDump."
-  },
-  "candidates": [...]
-}
-```
-
-Pass `--top-k` to control how many candidates the LLM reasons over:
+Pass any threat description or report as an argument, via stdin, or with `--file`. Anghiari will chunk the text, scan it against ATT&CK techniques, and present an annotated text map showing exactly which passage triggered which technique, alongside LLM-generated rationale.
 
 ```bash
-anghiari search --top-k 10 "used living-off-the-land binaries to blend in with normal admin activity"
+anghiari search -f examples/iab_vishing_campaign.txt
+```
+
+```text
+TECHNIQUE SCAN  (4 matches)
+──────────────────────────────────────────────────────────────
+[1] 0.648  T1598.004    Phishing for Information: Spearphishing Voice reconnaissance  [HIGH]
+    ↳ "The adversary then executes a vishing campaign, and calls its victims leveraging the local language. The threat actor im…"
+    ↳ The text describes a vishing (voice phishing) campaign to establish trust, directly matching Spearphishing Voice.
+...
+
+ANNOTATED TEXT
+──────────────────────────────────────────────────────────────
+An IAB associated with other attacks in Belgium initiates a targeted attack against a remote office. The attack begins with a series of abnormal or undeliverable emails sent days before the attack...
+```
+
+For automation, pass `--json` to receive structured output of all matches, complete with their character offsets and LLM rationales.
+
+```bash
+anghiari search --json "adversary dumped credentials from LSASS memory"
+```
+
+Pass `--top` to control how many techniques are evaluated:
+
+```bash
+anghiari search --top 10 "used living-off-the-land binaries to blend in with normal admin activity"
 ```
 
 ### REST API
