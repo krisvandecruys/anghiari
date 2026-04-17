@@ -22,6 +22,8 @@ from .models import (
     LLMTechniqueMatch,
     SearchResult,
     TechniqueMatch,
+    llm_match_list_schema,
+    llm_technique_match_schema,
 )
 from .prompt import build_prompt, build_subtechnique_prompt
 from .scanner import ScanResult, scan_text
@@ -64,6 +66,10 @@ COLLECTION_NAME = "mitre_techniques"
 _collection = None
 _llm: Llama | None = None
 _subtech_map: dict[str, list[dict]] | None = None
+
+
+class LLMStructuredOutputError(RuntimeError):
+    pass
 
 
 def _get_collection():
@@ -115,6 +121,52 @@ def _get_subtech_map() -> dict[str, list[dict]]:
     return _subtech_map
 
 
+def _parse_llm_technique_match(raw: str) -> LLMTechniqueMatch:
+    try:
+        payload = json.loads(raw)
+    except json.JSONDecodeError as exc:
+        raise LLMStructuredOutputError("LLM returned invalid JSON") from exc
+
+    if not isinstance(payload, dict):
+        raise LLMStructuredOutputError("LLM returned non-object JSON")
+
+    required = {"technique_id", "name", "confidence", "rationale"}
+    if set(payload) != required:
+        raise LLMStructuredOutputError("LLM returned unexpected fields")
+
+    confidence = payload["confidence"]
+    if confidence not in {"GUESS", "LOW", "MEDIUM", "HIGH", "CERTAIN", "UNKNOWN"}:
+        raise LLMStructuredOutputError("LLM returned invalid confidence value")
+
+    if not all(isinstance(payload[key], str) for key in required):
+        raise LLMStructuredOutputError("LLM returned non-string technique fields")
+
+    return LLMTechniqueMatch(
+        technique_id=payload["technique_id"],
+        name=payload["name"],
+        confidence=payload["confidence"],
+        rationale=payload["rationale"],
+    )
+
+
+def _parse_llm_match_list(raw: str) -> LLMMatchList:
+    try:
+        payload = json.loads(raw)
+    except json.JSONDecodeError as exc:
+        raise LLMStructuredOutputError("LLM returned invalid JSON") from exc
+
+    if not isinstance(payload, dict) or set(payload) != {"matches"}:
+        raise LLMStructuredOutputError("LLM returned invalid match-list envelope")
+
+    matches = payload["matches"]
+    if not isinstance(matches, list):
+        raise LLMStructuredOutputError("LLM returned non-list matches")
+
+    return LLMMatchList(
+        matches=[_parse_llm_technique_match(json.dumps(m)) for m in matches]
+    )
+
+
 def _llm_call(messages: list[dict[str, str]]) -> LLMTechniqueMatch:
     from .config import get_config
 
@@ -123,13 +175,18 @@ def _llm_call(messages: list[dict[str, str]]) -> LLMTechniqueMatch:
         Any,
         _get_llm().create_chat_completion(
             messages=cast(Any, messages),
-            response_format={"type": "json_object"},
+            response_format={
+                "type": "json_object",
+                "schema": llm_technique_match_schema(),
+            },
             max_tokens=llm_cfg.max_tokens,
             temperature=llm_cfg.temperature,
         ),
     )
-    raw = cast(str, response["choices"][0]["message"]["content"])
-    return LLMTechniqueMatch.model_validate_json(raw)
+    raw = cast(str | None, response["choices"][0]["message"]["content"])
+    if not raw:
+        raise LLMStructuredOutputError("LLM returned empty content")
+    return _parse_llm_technique_match(raw)
 
 
 def _llm_call_multi(
@@ -142,20 +199,25 @@ def _llm_call_multi(
         Any,
         _get_llm().create_chat_completion(
             messages=cast(Any, messages),
-            response_format={"type": "json_object"},
+            response_format={
+                "type": "json_object",
+                "schema": llm_match_list_schema(),
+            },
             max_tokens=llm_cfg.max_tokens * max_matches,
             temperature=llm_cfg.temperature,
         ),
     )
-    raw = cast(str, response["choices"][0]["message"]["content"])
-    return LLMMatchList.model_validate_json(raw).matches
+    raw = cast(str | None, response["choices"][0]["message"]["content"])
+    if not raw:
+        raise LLMStructuredOutputError("LLM returned empty content")
+    return _parse_llm_match_list(raw).matches
 
 
 def _to_result_match(
     chunk: Any,
     *,
-    confidence: Any = None,
-    rationale: str | None = None,
+    confidence: Any = "UNKNOWN",
+    rationale: str = "Not provided.",
     co_techniques: list[CoTechnique] | None = None,
 ) -> TechniqueMatch:
     return TechniqueMatch(
@@ -186,7 +248,6 @@ def _to_result_match(
 
 
 def _rerank_matches(
-    query: str,
     matches: list[Any],
     top_n: int,
 ) -> list[TechniqueMatch]:
@@ -222,22 +283,30 @@ def _rerank_matches(
         remaining_chunks = len(chunks_to_process) - 1 - i
         slots_needed = max(1, (top_n - len(reranked)) - remaining_chunks)
 
-        llm_matches = _llm_call_multi(
-            [
-                {"role": "system", "content": system},
-                {
-                    "role": "user",
-                    "content": build_prompt(chunk.chunk_text, candidates, slots_needed),
-                },
-            ],
-            slots_needed,
-        )
+        try:
+            llm_matches = _llm_call_multi(
+                [
+                    {"role": "system", "content": system},
+                    {
+                        "role": "user",
+                        "content": build_prompt(
+                            chunk.chunk_text, candidates, slots_needed
+                        ),
+                    },
+                ],
+                slots_needed,
+            )
+        except LLMStructuredOutputError as exc:
+            _log.warning(
+                "LLM reranking failed for chunk %s: %s", chunk.technique_id, exc
+            )
+            reranked.append(_to_result_match(chunk))
+            reranked[-1].color_idx = len(reranked) - 1
+            continue
 
         if not llm_matches:
             reranked.append(_to_result_match(chunk))
-            reranked[-1] = reranked[-1].model_copy(
-                update={"color_idx": len(reranked) - 1}
-            )
+            reranked[-1].color_idx = len(reranked) - 1
             continue
 
         selected_ids = {tm.technique_id for tm in llm_matches}
@@ -258,17 +327,24 @@ def _rerank_matches(
             orig_id = tm.technique_id
             subtechs = subtech_map.get(tm.technique_id, [])
             if subtechs:
-                tm = _llm_call(
-                    [
-                        {"role": "system", "content": system},
-                        {
-                            "role": "user",
-                            "content": build_subtechnique_prompt(
-                                chunk.chunk_text, tm, subtechs
-                            ),
-                        },
-                    ]
-                )
+                try:
+                    tm = _llm_call(
+                        [
+                            {"role": "system", "content": system},
+                            {
+                                "role": "user",
+                                "content": build_subtechnique_prompt(
+                                    chunk.chunk_text, tm, subtechs
+                                ),
+                            },
+                        ]
+                    )
+                except LLMStructuredOutputError as exc:
+                    _log.warning(
+                        "LLM subtechnique refinement failed for %s: %s",
+                        tm.technique_id,
+                        exc,
+                    )
 
             orig = next((c for c in candidates if c["mitre_id"] == orig_id), None)
             updated_chunk = dataclasses.replace(
@@ -286,12 +362,32 @@ def _rerank_matches(
                     confidence=tm.confidence,
                     rationale=tm.rationale,
                     co_techniques=(
-                        [CoTechnique(**co) for co in unselected] if j == 0 else []
+                        [
+                            CoTechnique(
+                                technique_id=co["technique_id"],
+                                name=co["name"],
+                                tactic=co["tactic"],
+                                score=co["score"],
+                            )
+                            for co in unselected
+                        ]
+                        if j == 0
+                        else []
                     ),
                 )
             )
 
     return reranked
+
+
+def validate_top_k(top_k: int | None) -> int:
+    from .config import get_config
+
+    if top_k is None:
+        top_k = get_config().search.top_k
+    if not 1 <= top_k <= 5:
+        raise ValueError("top_k must be between 1 and 5")
+    return top_k
 
 
 def search_technique(
@@ -300,9 +396,7 @@ def search_technique(
     """Map a free-text attack description to one or more MITRE ATT&CK techniques."""
     from .config import get_config
 
-    cfg = get_config()
-    if top_k is None:
-        top_k = cfg.search.top_k
+    top_k = validate_top_k(top_k)
 
     top_scan = top_k * 2
     _log.info("Scanning text against MITRE ATT&CK techniques (top %d)...", top_scan)
@@ -311,12 +405,12 @@ def search_technique(
         return SearchResult(text=query, matches=[])
 
     _log.info("Running LLM to rerank chunk-level candidates...")
-    resolved = _rerank_matches(query, scan_result.matches, top_k)
+    resolved = _rerank_matches(scan_result.matches, top_k)
 
     if not all_confidence:
         _log.info("Filtering matches to only HIGH or CERTAIN confidence...")
         resolved = [m for m in resolved if m.confidence in ("HIGH", "CERTAIN")]
         for idx, match in enumerate(resolved):
-            resolved[idx] = match.model_copy(update={"color_idx": idx})
+            resolved[idx].color_idx = idx
 
     return SearchResult(text=query, matches=resolved[:top_k])

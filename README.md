@@ -81,16 +81,67 @@ ANNOTATED TEXT
 An IAB associated with other attacks in Belgium initiates a targeted attack against a remote office. The attack begins with a series of abnormal or undeliverable emails sent days before the attack...
 ```
 
-For automation, pass `--json` to receive the same structured response shape used by the REST API and MCP server.
+For automation, pass `--json` to receive the same structured response shape used by the REST API and MCP JSON MCP tool.
 
 ```bash
 anghiari search --json "adversary dumped credentials from LSASS memory"
 ```
 
-Pass `--top` to control how many techniques are evaluated:
+The `--top-k` range is intentionally constrained to `1..5` to keep this focused on compact attack descriptions rather than very large text blobs.
 
 ```bash
-anghiari search --top 10 "used living-off-the-land binaries to blend in with normal admin activity"
+anghiari search --top-k 5 "used living-off-the-land binaries to blend in with normal admin activity"
+```
+
+If you want a faster scanner-only pass, disable reranking:
+
+```bash
+anghiari search --no-reranking -f examples/iab_vishing_campaign.txt
+```
+
+Tradeoff of `--no-reranking`:
+
+- faster
+- no LLM confidence calibration
+- no rationale generation
+- no subtechnique refinement
+- `confidence` is set to `UNKNOWN`
+- `rationale` is set to `Not provided.`
+
+Canonical JSON shape:
+
+```json
+{
+  "text": "adversary dumped credentials from LSASS memory",
+  "matches": [
+    {
+      "technique_id": "T1003.001",
+      "name": "OS Credential Dumping: LSASS Memory",
+      "tactic": "credential-access",
+      "score": 0.78,
+      "chunk_text": "adversary dumped credentials from LSASS memory",
+      "start": 0,
+      "end": 45,
+      "color_idx": 0,
+      "confidence": "HIGH",
+      "rationale": "The text explicitly describes dumping credentials from LSASS memory.",
+      "co_techniques": []
+    }
+  ],
+  "best_match": {
+    "technique_id": "T1003.001",
+    "name": "OS Credential Dumping: LSASS Memory",
+    "tactic": "credential-access",
+    "score": 0.78,
+    "chunk_text": "adversary dumped credentials from LSASS memory",
+    "start": 0,
+    "end": 45,
+    "color_idx": 0,
+    "confidence": "HIGH",
+    "rationale": "The text explicitly describes dumping credentials from LSASS memory.",
+    "co_techniques": []
+  }
+}
 ```
 
 ### REST API
@@ -106,12 +157,15 @@ anghiari api --reload           # dev mode
 ```bash
 curl -s -X POST http://localhost:8000/search \
   -H "Content-Type: application/json" \
-  -d '{"query": "PowerShell used to download and execute a remote payload"}' | jq .
+  -d '{"query": "PowerShell used to download and execute a remote payload", "top_k": 3}' | jq .
 ```
 
 ### MCP server
 
-For use with Claude Desktop or any MCP client:
+For use with Claude Desktop or any MCP client. The server exposes two tools:
+
+- `search_attack_technique_json`: returns the full structured JSON payload
+- `search_attack_technique_best`: returns a compact multi-line best answer with rationale
 
 ```bash
 anghiari mcp
@@ -157,7 +211,7 @@ src/anghiari/
 ├── embedder.py      Harrier wrapper: embed_query / embed_documents
 ├── scanner.py       chunk extraction, scoring, overlap resolution, ANSI render
 ├── prompt.py        LLM prompt builders
-├── models.py        Pydantic types (incl. Confidence literal)
+├── models.py        dataclass result types, serializers, and LLM schemas
 ├── api.py           Litestar REST API
 └── mcp.py           FastMCP server
 ```

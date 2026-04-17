@@ -1,8 +1,9 @@
+import dataclasses
 import json
 import logging
 import sys
 from pathlib import Path
-from typing import Any, Optional, cast
+from typing import Optional
 
 import typer
 
@@ -56,25 +57,22 @@ def search(
     file: Optional[Path] = typer.Option(
         None, "--file", "-f", help="Read text from a file"
     ),
-    top: int = typer.Option(
-        5, "--top", "-n", help="Distinct technique matches to return"
+    top_k: int = typer.Option(
+        5, "--top-k", "-n", help="Distinct technique matches to return (1-5)"
     ),
-    no_llm: bool = typer.Option(
+    no_reranking: bool = typer.Option(
         False,
-        "--no-llm",
-        is_flag=True,
-        help="Skip LLM reranking; use cosine scores only (faster)",
+        "--no-reranking",
+        help="Skip LLM reranking and subtechnique refinement; use scanner scores only",
     ),
     json_output: bool = typer.Option(
         False,
         "--json",
-        is_flag=True,
         help="Output structured JSON instead of ANSI table",
     ),
     all_confidence: bool = typer.Option(
         False,
         "--all-confidence",
-        is_flag=True,
         help="Include lower confidence matches (GUESS, LOW, MEDIUM)",
     ),
 ) -> None:
@@ -82,12 +80,13 @@ def search(
 
     Accepts any length of text — a short query phrase, a paragraph, or a full
     threat report (via --file or stdin).  Always shows which passage in the
-    source triggered each match.  Pass --no-llm for fast cosine-only results.
-    JSON output matches the API and MCP response shape.
+    source triggered each match. Pass --no-reranking for faster scanner-only
+    results with UNKNOWN confidence and no LLM rationale. JSON output matches
+    the API and MCP response shape.
     """
-    from .mapper import search_technique
+    from .mapper import search_technique, validate_top_k
     from .models import CoTechnique as ResultCoTechnique
-    from .models import SearchResult, TechniqueMatch
+    from .models import SearchResult, TechniqueMatch, search_result_to_dict
     from .scanner import ChunkMatch, CoTechnique, ScanResult, render
 
     if file:
@@ -102,19 +101,27 @@ def search(
 
     from rich.console import Console
 
+    try:
+        top_k = validate_top_k(top_k)
+    except ValueError as exc:
+        typer.echo(f"Error: {exc}", err=True)
+        raise typer.Exit(2) from exc
+
     console = Console(stderr=True)
     with console.status("Starting search...", spinner="dots") as status:
-        if no_llm:
+        if no_reranking:
             from .scanner import scan_text
 
             status.update(
-                f"Scanning text against MITRE ATT&CK techniques (top {top})..."
+                f"Scanning text against MITRE ATT&CK techniques (top {top_k})..."
             )
-            _log.info("Scanning text against MITRE ATT&CK techniques (top %d)...", top)
-            scan_result = scan_text(blob, top)
+            _log.info(
+                "Scanning text against MITRE ATT&CK techniques (top %d)...", top_k
+            )
+            scan_result = scan_text(blob, top_k)
             scan_result = ScanResult(
                 text=scan_result.text,
-                matches=scan_result.matches[:top],
+                matches=scan_result.matches[:top_k],
             )
             result = SearchResult(
                 text=scan_result.text,
@@ -128,8 +135,8 @@ def search(
                         start=m.start,
                         end=m.end,
                         color_idx=m.color_idx,
-                        confidence=cast(Any, m.confidence),
-                        rationale=m.rationale,
+                        confidence="UNKNOWN",
+                        rationale="Not provided.",
                         co_techniques=[
                             ResultCoTechnique(
                                 technique_id=co.technique_id,
@@ -142,12 +149,12 @@ def search(
                     )
                     for m in scan_result.matches
                 ],
-            ).model_dump()
+            )
         else:
             status.update("Running shared search pipeline...")
             _log.info("Running shared search pipeline...")
-            search_result = search_technique(blob, top, all_confidence)
-            result = search_result.model_dump()
+            search_result = search_technique(blob, top_k, all_confidence)
+            result = search_result
             scan_result = ScanResult(
                 text=search_result.text,
                 matches=[
@@ -179,7 +186,7 @@ def search(
             )
 
     if json_output:
-        typer.echo(json.dumps(result, indent=2))
+        typer.echo(json.dumps(search_result_to_dict(result), indent=2))
     else:
         typer.echo(render(scan_result))
 
