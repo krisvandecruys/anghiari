@@ -40,6 +40,7 @@ _LINE = "─" * 62
 @dataclass
 class CoTechnique:
     """A technique that co-fires on the same chunk as a primary ChunkMatch."""
+
     technique_id: str
     name: str
     tactic: str
@@ -51,20 +52,20 @@ class ChunkMatch:
     technique_id: str
     name: str
     tactic: str
-    score: float           # cosine similarity 0–1
-    chunk_text: str        # sentence window that best matched this technique
-    start: int             # char offset in original text (inclusive)
-    end: int               # char offset in original text (exclusive)
-    color_idx: int         # index into _COLORS
+    score: float  # cosine similarity 0–1
+    chunk_text: str  # sentence window that best matched this technique
+    start: int  # char offset in original text (inclusive)
+    end: int  # char offset in original text (exclusive)
+    color_idx: int  # index into _COLORS
     co_techniques: list[CoTechnique] = field(default_factory=list)
-    confidence: str | None = None   # set by CLI after LLM reranking
-    rationale: str | None = None    # set by CLI after LLM reranking
+    confidence: str | None = None  # set by CLI after LLM reranking
+    rationale: str | None = None  # set by CLI after LLM reranking
 
 
 @dataclass
 class ScanResult:
     matches: list[ChunkMatch]  # top N, score-descending
-    text: str                  # original input (used by render())
+    text: str  # original input (used by render())
 
 
 # ── Lazy singleton: technique embedding matrix ────────────────────────────────
@@ -78,9 +79,11 @@ def _get_tech_matrix() -> tuple[np.ndarray, list[dict]]:
     global _tech_matrix, _tech_meta
     if _tech_matrix is None:
         from .mapper import _get_collection
+
         result = _get_collection().get(include=["embeddings", "metadatas"])
         _tech_meta = result["metadatas"]
         _tech_matrix = np.array(result["embeddings"], dtype=np.float32)
+    assert _tech_matrix is not None and _tech_meta is not None
     return _tech_matrix, _tech_meta
 
 
@@ -89,7 +92,9 @@ def _get_tech_matrix() -> tuple[np.ndarray, list[dict]]:
 _CO_FIRE_THRESHOLD = 0.05  # max score gap vs primary to qualify as a co-fire
 
 
-def _span_overlaps(a_start: int, a_end: int, b_start: int, b_end: int, threshold: float = 0.4) -> bool:
+def _span_overlaps(
+    a_start: int, a_end: int, b_start: int, b_end: int, threshold: float = 0.4
+) -> bool:
     """Return True if two char spans overlap by at least *threshold* of the shorter span."""
     overlap = max(0, min(a_end, b_end) - max(a_start, b_start))
     shorter = min(a_end - a_start, b_end - b_start)
@@ -107,48 +112,90 @@ def _is_subtechnique(technique_id: str) -> bool:
 
 # ── Chunking ──────────────────────────────────────────────────────────────────
 
-# Sentence boundary: end-of-sentence punctuation followed by whitespace,
-# or blank lines (paragraph breaks).
-_SENT_SPLIT = re.compile(r"(?<=[.!?])\s+|\n{2,}")
-
 _MIN_CHUNK_LEN = 20  # ignore fragments shorter than this
 
 
-def sentence_chunks(text: str) -> list[tuple[str, int, int]]:
+def multi_level_chunks(text: str) -> list[tuple[str, int, int]]:
     """Return list of (chunk_text, start, end) for the input text.
 
-    Produces both individual sentences and overlapping 2-sentence windows so
-    that short decisive sentences score on their own and longer context windows
-    improve recall for multi-clause sentences.
+    Generates a rich set of overlapping spans:
+    1. Paragraphs (split by blank lines)
+    2. Sentences (split by sentence-ending punctuation)
+    3. Overlapping 2-sentence windows
+    4. Subsentences (split by commas, colons, semicolons)
+    5. Quoted text (text between quotes)
 
     Character offsets are exact slices of *text*:  text[start:end] == chunk_text.
+    This allows the greedy selector to pick the tightest span that strongly
+    matches a technique, falling back to sentences or paragraphs if needed.
     """
-    sentences: list[tuple[str, int, int]] = []
-    pos = 0
-    for part in _SENT_SPLIT.split(text):
-        stripped = part.strip()
-        if len(stripped) < _MIN_CHUNK_LEN:
-            pos = text.find(part, pos) + len(part)
-            continue
-        idx = text.find(part, pos)
-        if idx == -1:
-            idx = pos
-        start = idx + (len(part) - len(part.lstrip()))
-        end = idx + len(part.rstrip())
-        sentences.append((text[start:end], start, end))
-        pos = idx + len(part)
+    chunks: set[tuple[str, int, int]] = set()
 
-    chunks: list[tuple[str, int, int]] = list(sentences)
-
-    # Add overlapping 2-sentence windows for better contextual scoring.
-    for i in range(len(sentences) - 1):
-        _, a_start, _ = sentences[i]
-        _, _, b_end = sentences[i + 1]
-        window = text[a_start:b_end].strip()
+    def add_chunk(start: int, end: int):
+        window = text[start:end].strip()
         if len(window) >= _MIN_CHUNK_LEN:
-            chunks.append((window, a_start, b_end))
+            # Re-adjust start and end to the stripped window
+            l_strip_len = len(text[start:end]) - len(text[start:end].lstrip())
+            r_strip_len = len(text[start:end]) - len(text[start:end].rstrip())
+            s = start + l_strip_len
+            e = end - r_strip_len
+            if e > s and len(text[s:e]) >= _MIN_CHUNK_LEN:
+                chunks.add((text[s:e], s, e))
 
-    return chunks
+    def split_span(start: int, end: int, pattern: re.Pattern) -> list[tuple[int, int]]:
+        span_text = text[start:end]
+        parts = []
+        pos = 0
+        for match in pattern.finditer(span_text):
+            parts.append((start + pos, start + match.start()))
+            pos = match.end()
+        parts.append((start + pos, end))
+
+        result = []
+        for s, e in parts:
+            if e > s:
+                result.append((s, e))
+                add_chunk(s, e)
+        return result
+
+    # 1. Paragraphs
+    para_spans = []
+    pos = 0
+    _PARA_SPLIT = re.compile(r"\n+")
+    for match in _PARA_SPLIT.finditer(text):
+        if match.start() > pos:
+            para_spans.append((pos, match.start()))
+            add_chunk(pos, match.start())
+        pos = match.end()
+    if pos < len(text):
+        para_spans.append((pos, len(text)))
+        add_chunk(pos, len(text))
+
+    _SENT_SPLIT = re.compile(r"(?<=[.!?])\s+")
+    _SUB_SPLIT = re.compile(r"(?<=[,;:])\s+")
+    _QUOTE_EXTRACT = re.compile(r'"([^"]+)"|\'([^\']+)\'')
+
+    # 2. Sentences
+    for p_start, p_end in para_spans:
+        sent_spans = split_span(p_start, p_end, _SENT_SPLIT)
+
+        # 3. Overlapping 2-sentence windows
+        for i in range(len(sent_spans) - 1):
+            s1_start, _ = sent_spans[i]
+            _, s2_end = sent_spans[i + 1]
+            add_chunk(s1_start, s2_end)
+
+        # 4. Subsentences
+        for s_start, s_end in sent_spans:
+            split_span(s_start, s_end, _SUB_SPLIT)
+
+            # 5. Quoted text inside sentence
+            sent_text = text[s_start:s_end]
+            for match in _QUOTE_EXTRACT.finditer(sent_text):
+                add_chunk(s_start + match.start(), s_start + match.end())
+
+    # Sort chunks by start, then -end to be deterministic
+    return sorted(list(chunks), key=lambda x: (x[1], -x[2]))
 
 
 # ── Core scoring ──────────────────────────────────────────────────────────────
@@ -165,7 +212,7 @@ def scan_text(text: str, top_n: int = 8) -> ScanResult:
     from .config import get_config
     from .embedder import embed_documents
 
-    chunks = sentence_chunks(text)
+    chunks = multi_level_chunks(text)
     if not chunks:
         return ScanResult(matches=[], text=text)
 
@@ -173,7 +220,9 @@ def scan_text(text: str, top_n: int = 8) -> ScanResult:
     chunk_texts = [c[0] for c in chunks]
 
     # Embed chunks with the query prefix — they are queries against the corpus.
-    chunk_matrix = embed_documents([prefix + t for t in chunk_texts])  # (n_chunks, 1024)
+    chunk_matrix = embed_documents(
+        [prefix + t for t in chunk_texts]
+    )  # (n_chunks, 1024)
 
     tech_matrix, tech_meta = _get_tech_matrix()  # (n_techs, 1024)
 
@@ -181,7 +230,7 @@ def scan_text(text: str, top_n: int = 8) -> ScanResult:
     scores = chunk_matrix @ tech_matrix.T  # (n_chunks, n_techs)
 
     best_chunk_idxs = scores.argmax(axis=0)  # (n_techs,)
-    best_scores = scores.max(axis=0)          # (n_techs,)
+    best_scores = scores.max(axis=0)  # (n_techs,)
 
     # ── Greedy selection with co-firing detection ─────────────────────────────
     # Walk techniques best-score-first.  For each technique:
@@ -193,7 +242,9 @@ def scan_text(text: str, top_n: int = 8) -> ScanResult:
     sorted_tech_idxs = best_scores.argsort()[::-1]
     claimed: list[ChunkMatch] = []
     claimed_spans: list[tuple[int, int]] = []
-    seen_ids: set[str] = set()  # all technique IDs already placed (primary or co-technique)
+    seen_ids: set[str] = (
+        set()
+    )  # all technique IDs already placed (primary or co-technique)
 
     for tech_idx in sorted_tech_idxs:
         if len(claimed) >= top_n and all(
@@ -213,22 +264,28 @@ def scan_text(text: str, top_n: int = 8) -> ScanResult:
             continue
 
         overlap_idx = next(
-            (i for i, (s, e) in enumerate(claimed_spans) if _span_overlaps(cs, ce, s, e)),
+            (
+                i
+                for i, (s, e) in enumerate(claimed_spans)
+                if _span_overlaps(cs, ce, s, e)
+            ),
             None,
         )
 
         if overlap_idx is None:
             if len(claimed) < top_n:
-                claimed.append(ChunkMatch(
-                    technique_id=tech_id,
-                    name=meta["name"],
-                    tactic=meta.get("tactic", ""),
-                    score=tech_score,
-                    chunk_text=chunks[ci][0],
-                    start=cs,
-                    end=ce,
-                    color_idx=len(claimed),
-                ))
+                claimed.append(
+                    ChunkMatch(
+                        technique_id=tech_id,
+                        name=meta["name"],
+                        tactic=meta.get("tactic", ""),
+                        score=tech_score,
+                        chunk_text=chunks[ci][0],
+                        start=cs,
+                        end=ce,
+                        color_idx=len(claimed),
+                    )
+                )
                 claimed_spans.append((cs, ce))
                 seen_ids.add(tech_id)
         else:
@@ -236,7 +293,9 @@ def scan_text(text: str, top_n: int = 8) -> ScanResult:
             score_gap = primary.score - tech_score
 
             if _is_parent_sub_pair(tech_id, primary.technique_id):
-                if _is_subtechnique(tech_id) and not _is_subtechnique(primary.technique_id):
+                if _is_subtechnique(tech_id) and not _is_subtechnique(
+                    primary.technique_id
+                ):
                     # Upgrade: replace parent with the more specific subtechnique.
                     seen_ids.discard(primary.technique_id)
                     primary.technique_id = tech_id
@@ -247,12 +306,14 @@ def scan_text(text: str, top_n: int = 8) -> ScanResult:
                 # else: primary is already subtechnique or same specificity → skip.
             elif score_gap <= _CO_FIRE_THRESHOLD:
                 # Genuinely distinct technique, nearly as strong → co-mention.
-                primary.co_techniques.append(CoTechnique(
-                    technique_id=tech_id,
-                    name=meta["name"],
-                    tactic=meta.get("tactic", ""),
-                    score=tech_score,
-                ))
+                primary.co_techniques.append(
+                    CoTechnique(
+                        technique_id=tech_id,
+                        name=meta["name"],
+                        tactic=meta.get("tactic", ""),
+                        score=tech_score,
+                    )
+                )
                 seen_ids.add(tech_id)
 
     return ScanResult(matches=claimed, text=text)
@@ -291,7 +352,7 @@ def render(result: ScanResult) -> str:
             lines.append(
                 f"         {c}also: {co.technique_id:<12} {co.name}  ({co.score:.3f}){_RESET}"
             )
-        lines.append(f"    {c}↳ \"{excerpt}\"{_RESET}")
+        lines.append(f'    {c}↳ "{excerpt}"{_RESET}')
         if m.rationale:
             lines.append(f"    {c}↳ {m.rationale}{_RESET}")
         lines.append("")
@@ -342,7 +403,9 @@ def render(result: ScanResult) -> str:
             f"\n         {c}+ {co.technique_id}  {co.name}{_RESET}"
             for co in m.co_techniques
         )
-        lines.append(f"  {c}[{m.color_idx + 1}]{_RESET}  {m.technique_id}  {m.name}{co_str}")
+        lines.append(
+            f"  {c}[{m.color_idx + 1}]{_RESET}  {m.technique_id}  {m.name}{co_str}"
+        )
 
     return "\n".join(lines)
 
@@ -358,7 +421,9 @@ if __name__ == "__main__":
     )
     p.add_argument("text", nargs="?", help="Text to scan (omit to read from stdin)")
     p.add_argument("--file", "-f", metavar="FILE", help="Read text from a file")
-    p.add_argument("--top", "-n", type=int, default=8, help="Number of top techniques (default: 8)")
+    p.add_argument(
+        "--top", "-n", type=int, default=8, help="Number of top techniques (default: 8)"
+    )
     args = p.parse_args()
 
     if args.file:
