@@ -1,4 +1,5 @@
 import json
+import logging
 import sys
 from pathlib import Path
 from typing import TYPE_CHECKING, Optional
@@ -15,6 +16,8 @@ app = typer.Typer(
     rich_markup_mode="rich",
 )
 
+_log = logging.getLogger(__name__)
+
 
 @app.callback()
 def _callback(
@@ -25,8 +28,25 @@ def _callback(
         metavar="FILE",
         help="Path to config file (default: ~/.config/anghiari/config.toml)",
     ),
+    verbose: bool = typer.Option(
+        False,
+        "--verbose",
+        "-v",
+        help="Enable verbose logging output",
+    ),
 ) -> None:
     from .config import load_config, set_config
+
+    logging.basicConfig(
+        level=logging.INFO if verbose else logging.WARNING,
+        format="%(message)s",
+    )
+
+    if verbose:
+        # Silence noisy third-party loggers
+        logging.getLogger("httpx").setLevel(logging.WARNING)
+        logging.getLogger("sentence_transformers").setLevel(logging.WARNING)
+        logging.getLogger("huggingface_hub").setLevel(logging.WARNING)
 
     set_config(load_config(config))
 
@@ -75,6 +95,10 @@ def _run_llm_on_scan(query: str, scan_result: "ScanResult", top_n: int) -> "Scan
             )
 
     # Phase 2: LLM picks and ranks from scan candidates.
+    _log.info(
+        "Requesting LLM to select best primary matches from %d candidates...",
+        len(candidates),
+    )
     llm_matches = _llm_call_multi(
         [
             {"role": "system", "content": system},
@@ -86,9 +110,15 @@ def _run_llm_on_scan(query: str, scan_result: "ScanResult", top_n: int) -> "Scan
     # Phase 3: subtechnique resolution (one extra LLM call per match that has subtechs).
     subtech_map = _get_subtech_map()
     resolved = []
+    _log.info("Resolving selected techniques to subtechniques (if applicable)...")
     for match in llm_matches:
         subtechs = subtech_map.get(match.technique_id, [])
         if subtechs:
+            _log.info(
+                "Refining %s with %d subtechnique options...",
+                match.technique_id,
+                len(subtechs),
+            )
             refined = _llm_call(
                 [
                     {"role": "system", "content": system},
@@ -197,10 +227,15 @@ def search(
         blob = sys.stdin.read()
 
     # Always run scan for provenance.  Fetch 2× candidates when LLM will rerank.
-    scan_result = scan_text(blob, top * 2 if not no_llm else top)
+    top_scan = top * 2 if not no_llm else top
+    _log.info("Scanning text against MITRE ATT&CK techniques (top %d)...", top_scan)
+    scan_result = scan_text(blob, top_scan)
 
     if not no_llm and scan_result.matches:
+        _log.info("Refining scan results using Nemotron LLM...")
         scan_result = _run_llm_on_scan(blob, scan_result, top)
+
+    _log.info("Returning top %d distinct techniques.", top)
 
     # Trim to requested top-N after optional LLM reorder.
     from dataclasses import replace

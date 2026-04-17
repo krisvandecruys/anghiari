@@ -122,6 +122,11 @@ def embed_and_index(techniques: list[dict]) -> None:
 
 
 def main() -> None:
+    import logging
+
+    # Quick configure for standalone indexer
+    logging.basicConfig(level=logging.INFO, format="%(message)s")
+
     from .config import get_config
 
     cfg = get_config()

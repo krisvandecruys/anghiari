@@ -142,9 +142,11 @@ def search_technique(query: str, top_k: int | None = None) -> SearchResult:
     system = cfg.prompts.system
 
     # ── Phase 0: embed the query ─────────────────────────────────────────────
+    _log.info("Embedding full query text for generic RAG search...")
     query_vec = embed_query(query)
 
     # ── Phase 1: vector search ───────────────────────────────────────────────
+    _log.info("Querying ChromaDB vector index for top %d candidates...", top_k)
     results = _get_collection().query(query_embeddings=[query_vec], n_results=top_k)
     candidates = [
         {**meta, "score": round(1.0 - dist, 4)}
@@ -152,6 +154,7 @@ def search_technique(query: str, top_k: int | None = None) -> SearchResult:
     ]
 
     # ── Phase 2: LLM picks 1–max_matches from top-k ─────────────────────────
+    _log.info("Running LLM to rerank top candidates...")
     matches = _llm_call_multi(
         [
             {"role": "system", "content": system},
@@ -163,6 +166,7 @@ def search_technique(query: str, top_k: int | None = None) -> SearchResult:
     # ── Phase 3: subtechnique resolution for each match ─────────────────────
     subtech_map = _get_subtech_map()
     resolved = []
+    _log.info("Resolving exact subtechniques where necessary...")
     for match in matches:
         subtechs = subtech_map.get(match.technique_id, [])
         if subtechs:

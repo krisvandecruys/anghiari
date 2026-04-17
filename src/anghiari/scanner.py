@@ -12,10 +12,13 @@ Public API:
 
 from __future__ import annotations
 
+import logging
 import re
 from dataclasses import dataclass, field
 
 import numpy as np
+
+_log = logging.getLogger(__name__)
 
 # ── ANSI colour table (8 terminal-safe colours) ───────────────────────────────
 
@@ -215,18 +218,24 @@ def scan_text(text: str, top_n: int = 8) -> ScanResult:
 
     chunks = multi_level_chunks(text)
     if not chunks:
+        _log.warning("No valid text chunks found to scan.")
         return ScanResult(matches=[], text=text)
 
     prefix = get_config().embedder.query_prefix
     chunk_texts = [c[0] for c in chunks]
 
+    _log.info("Embedding %d extracted text chunks...", len(chunk_texts))
     # Embed chunks with the query prefix — they are queries against the corpus.
     chunk_matrix = embed_documents(
         [prefix + t for t in chunk_texts]
     )  # (n_chunks, 1024)
 
+    _log.info("Loading technique embedding matrix...")
     tech_matrix, tech_meta = _get_tech_matrix()  # (n_techs, 1024)
 
+    _log.info(
+        "Calculating cosine similarities against %d techniques...", len(tech_meta)
+    )
     # Cosine similarity: vectors are L2-normalised, so dot product == cosine.
     scores = chunk_matrix @ tech_matrix.T  # (n_chunks, n_techs)
 
