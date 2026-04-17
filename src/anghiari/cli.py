@@ -220,6 +220,9 @@ def search(
     from .scanner import render, scan_text
 
     if file:
+        if not file.exists():
+            typer.echo(f"Error: File '{file}' not found.", err=True)
+            raise typer.Exit(1)
         blob = file.read_text()
     elif text:
         blob = text
