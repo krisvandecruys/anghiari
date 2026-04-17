@@ -21,12 +21,13 @@ from .models import SearchResult
 class SearchRequest:
     query: str
     top_k: int = field(default=5)
+    all_confidence: bool = field(default=False)
 
 
 @post("/search", sync_to_thread=True)
 def search_handler(data: SearchRequest) -> SearchResult:
     """Search for the best-matching MITRE ATT&CK technique for a free-text attack description."""
-    return search_technique(data.query, data.top_k)
+    return search_technique(data.query, data.top_k, data.all_confidence)
 
 
 app = Litestar(
@@ -41,5 +42,6 @@ app = Litestar(
 
 def run() -> None:
     from .config import get_config
+
     cfg = get_config().api
     uvicorn.run("anghiari.api:app", host=cfg.host, port=cfg.port, reload=False)

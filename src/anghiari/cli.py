@@ -209,6 +209,12 @@ def search(
         is_flag=True,
         help="Output structured JSON instead of ANSI table",
     ),
+    all_confidence: bool = typer.Option(
+        False,
+        "--all-confidence",
+        is_flag=True,
+        help="Include lower confidence matches (GUESS, LOW, MEDIUM)",
+    ),
 ) -> None:
     """[bold]Search[/bold] a threat description for MITRE ATT&CK techniques.
 
@@ -235,8 +241,20 @@ def search(
     scan_result = scan_text(blob, top_scan)
 
     if not no_llm and scan_result.matches:
+        from dataclasses import replace
+
         _log.info("Refining scan results using Nemotron LLM...")
         scan_result = _run_llm_on_scan(blob, scan_result, top)
+
+        if not all_confidence:
+            _log.info("Filtering matches to only HIGH or CERTAIN confidence...")
+            filtered = [
+                m for m in scan_result.matches if m.confidence in ("HIGH", "CERTAIN")
+            ]
+            # Re-assign sequential color indices so rendering remains consistent
+            for idx, m in enumerate(filtered):
+                filtered[idx] = replace(m, color_idx=idx)
+            scan_result = replace(scan_result, matches=filtered)
 
     _log.info("Returning top %d distinct techniques.", top)
 

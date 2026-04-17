@@ -131,7 +131,9 @@ def _llm_call_multi(messages: list[dict], max_matches: int) -> list[TechniqueMat
     return LLMMatchList.model_validate_json(raw).matches
 
 
-def search_technique(query: str, top_k: int | None = None) -> SearchResult:
+def search_technique(
+    query: str, top_k: int | None = None, all_confidence: bool = False
+) -> SearchResult:
     """Map a free-text attack description to one or more MITRE ATT&CK techniques."""
     from .config import get_config
 
@@ -182,5 +184,9 @@ def search_technique(query: str, top_k: int | None = None) -> SearchResult:
             resolved.append(refined)
         else:
             resolved.append(match)
+
+    if not all_confidence:
+        _log.info("Filtering matches to only HIGH or CERTAIN confidence...")
+        resolved = [m for m in resolved if m.confidence in ("HIGH", "CERTAIN")]
 
     return SearchResult(matches=resolved, candidates=candidates)
