@@ -22,12 +22,16 @@ def _get_model() -> SentenceTransformer:
     global _model
     if _model is None:
         from .config import get_config
+
         model_id = get_config().embedder.model_id
         _log.info("Loading embedding model %s", model_id)
         # Suppress the safetensors/transformers tqdm progress bar during weight loading
+        import huggingface_hub
         import transformers
+
         transformers.logging.set_verbosity_error()
         transformers.logging.disable_progress_bar()
+        huggingface_hub.utils.logging.set_verbosity_error()
         _model = SentenceTransformer(model_id)
     return _model
 
@@ -35,6 +39,7 @@ def _get_model() -> SentenceTransformer:
 def embed_query(text: str) -> list[float]:
     """Embed a single query string. Returns a 1024-dim L2-normalised vector."""
     from .config import get_config
+
     prefix = get_config().embedder.query_prefix
     vec = _get_model().encode(
         [prefix + text],

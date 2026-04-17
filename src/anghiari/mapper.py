@@ -24,6 +24,10 @@ warnings.filterwarnings(
     message="The `local_dir_use_symlinks` argument is deprecated",
     category=UserWarning,
 )
+warnings.filterwarnings(
+    "ignore",
+    message=".*unauthenticated requests.*",
+)
 
 _log = logging.getLogger(__name__)
 

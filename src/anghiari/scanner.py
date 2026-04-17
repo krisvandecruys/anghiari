@@ -362,8 +362,9 @@ def render(result: ScanResult) -> str:
             f"{c}{_BOLD}{m.technique_id:<12}{_RESET} {_BOLD}{m.name:<40} {m.tactic}{conf_badge}{_RESET}"
         )
         for co in m.co_techniques:
+            pad = " " * (len(label) + 1)
             lines.append(
-                f"         also: {c}{co.technique_id:<12}{_RESET} {co.name}  ({co.score:.3f})"
+                f"{pad}{co.score:.3f}  {c}{co.technique_id:<12}{_RESET} also: {co.name}"
             )
         lines.append(f'    {c}↳{_RESET} "{excerpt}"')
         if m.rationale:
