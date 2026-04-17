@@ -4,7 +4,7 @@
 
 [![Battle of Anghiari](https://upload.wikimedia.org/wikipedia/commons/c/c4/Peter_Paul_Ruben%27s_copy_of_the_lost_Battle_of_Anghiari.jpg)](https://commons.wikimedia.org/wiki/File:Peter_Paul_Ruben%27s_copy_of_the_lost_Battle_of_Anghiari.jpg)
 
-Anghiari searches free-text descriptions of attack behaviors against [MITRE ATT&CK](https://attack.mitre.org/) Enterprise techniques. Give it a sentence about what an attacker did; it returns chunk-grounded matches with technique IDs, confidence, rationale, and source offsets.
+Anghiari searches free-text descriptions of attack behaviors against [MITRE ATT&CK](https://attack.mitre.org/) Enterprise techniques. Give it a sentence about what an attacker did; it returns chunk-grounded matches with technique IDs, reranker scores, and source offsets.
 
 Everything runs 100% locally. No API keys. No external calls at query time.
 
@@ -24,8 +24,8 @@ Everything runs 100% locally. No API keys. No external calls at query time.
  greedy span selection     distinct source spans + co-firing techniques
          │
          ▼
- Nemotron 4B LLM           nvidia/NVIDIA-Nemotron-3-Nano-4B-GGUF
- (rerank per chunk, then resolve subtechniques)
+ Qwen3-Reranker-4B         Qwen/Qwen3-Reranker-4B
+ (rerank per chunk, then lightweight subtechnique upgrade)
          │
          ▼
  { text, matches[], best_match }
@@ -62,7 +62,7 @@ Add `--force` to re-download fresh STIX data.
 
 ### Search
 
-Pass any threat description or report as an argument, via stdin, or with `--file`. Anghiari will chunk the text, scan it against ATT&CK techniques, and present an annotated text map showing exactly which passage triggered which technique, alongside LLM-generated rationale.
+Pass any threat description or report as an argument, via stdin, or with `--file`. Anghiari will chunk the text, scan it against ATT&CK techniques, and present an annotated text map showing exactly which passage triggered which technique.
 
 ```bash
 anghiari search -f examples/iab_vishing_campaign.txt
@@ -71,9 +71,8 @@ anghiari search -f examples/iab_vishing_campaign.txt
 ```text
 TECHNIQUE SCAN  (4 matches)
 ──────────────────────────────────────────────────────────────
-[1] 0.648  T1598.004    Phishing for Information: Spearphishing Voice reconnaissance  [HIGH]
+[1] 0.648  T1598.004    Phishing for Information: Spearphishing Voice reconnaissance
     ↳ "The adversary then executes a vishing campaign, and calls its victims leveraging the local language. The threat actor im…"
-    ↳ The text describes a vishing (voice phishing) campaign to establish trust, directly matching Spearphishing Voice.
 ...
 
 ANNOTATED TEXT
@@ -102,11 +101,10 @@ anghiari search --no-reranking -f examples/iab_vishing_campaign.txt
 Tradeoff of `--no-reranking`:
 
 - faster
-- no LLM confidence calibration
-- no rationale generation
+- no dedicated reranker pass
 - no subtechnique refinement
-- `confidence` is set to `UNKNOWN`
-- `rationale` is set to `Not provided.`
+
+Default behavior keeps only results at or above the configured high-confidence reranker threshold. Pass `--all-confidence` to include lower-score results.
 
 Canonical JSON shape:
 
@@ -123,8 +121,6 @@ Canonical JSON shape:
       "start": 0,
       "end": 45,
       "color_idx": 0,
-      "confidence": "HIGH",
-      "rationale": "The text explicitly describes dumping credentials from LSASS memory.",
       "co_techniques": []
     }
   ],
@@ -137,8 +133,6 @@ Canonical JSON shape:
     "start": 0,
     "end": 45,
     "color_idx": 0,
-    "confidence": "HIGH",
-    "rationale": "The text explicitly describes dumping credentials from LSASS memory.",
     "co_techniques": []
   }
 }
@@ -165,7 +159,7 @@ curl -s -X POST http://localhost:8000/search \
 For use with Claude Desktop or any MCP client. The server exposes two tools:
 
 - `search_attack_technique_json`: returns the full structured JSON payload
-- `search_attack_technique_best`: returns a compact multi-line best answer with rationale
+- `search_attack_technique_best`: returns a compact multi-line best answer with score
 
 ```bash
 anghiari mcp
@@ -186,7 +180,7 @@ Add to `claude_desktop_config.json`:
 
 ## Configuration
 
-When you run the CLI for the first time, `~/.config/anghiari/config.toml` is created with commented defaults. Edit it to change models, LLM parameters, prompts, cache location, and more.
+When you run the CLI for the first time, `~/.config/anghiari/config.toml` is created with commented defaults. Edit it to change models, reranker thresholds, cache location, and more.
 
 Pass `--config <file>` before any subcommand to use a different config file:
 
@@ -211,7 +205,7 @@ src/anghiari/
 ├── embedder.py      Harrier wrapper: embed_query / embed_documents
 ├── scanner.py       chunk extraction, scoring, overlap resolution, ANSI render
 ├── prompt.py        LLM prompt builders
-├── models.py        dataclass result types, serializers, and LLM schemas
+├── models.py        dataclass result types and serializers
 ├── api.py           Litestar REST API
 └── mcp.py           FastMCP server
 ```

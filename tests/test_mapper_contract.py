@@ -3,7 +3,7 @@ import json
 from typer.testing import CliRunner
 
 from anghiari.cli import app
-from anghiari.mapper import LLMStructuredOutputError, search_technique, validate_top_k
+from anghiari.mapper import search_technique, validate_top_k
 from anghiari.mcp import search_attack_technique_best, search_attack_technique_json
 from anghiari.models import (
     CoTechnique as ResultCoTechnique,
@@ -45,21 +45,6 @@ def _dummy_scan_result() -> ScanResult:
     )
 
 
-def _high_confidence_match():
-    return [
-        type(
-            "LLMMatch",
-            (),
-            {
-                "technique_id": "T1110",
-                "name": "Brute Force",
-                "confidence": "HIGH",
-                "rationale": "Repeated password guessing matches brute force.",
-            },
-        )()
-    ]
-
-
 def _result_matches() -> list[TechniqueMatch]:
     return [
         TechniqueMatch(
@@ -71,8 +56,6 @@ def _result_matches() -> list[TechniqueMatch]:
             start=0,
             end=42,
             color_idx=0,
-            confidence="HIGH",
-            rationale="Repeated password guessing matches brute force.",
             co_techniques=[
                 ResultCoTechnique(
                     technique_id="T1078",
@@ -85,70 +68,48 @@ def _result_matches() -> list[TechniqueMatch]:
     ]
 
 
+def _stub_reranker(score: float = 0.91, corpus_id: int = 0):
+    return type(
+        "StubReranker",
+        (),
+        {
+            "rank": lambda self, query, docs, **kwargs: [
+                {"corpus_id": corpus_id, "score": score}
+            ]
+        },
+    )()
+
+
 def test_search_technique_returns_shared_contract(monkeypatch) -> None:
     monkeypatch.setattr(
         "anghiari.mapper.scan_text", lambda query, top_n: _dummy_scan_result()
     )
-    monkeypatch.setattr(
-        "anghiari.mapper._llm_call_multi",
-        lambda messages, max_matches: _high_confidence_match(),
-    )
     monkeypatch.setattr("anghiari.mapper._get_subtech_map", lambda: {})
+    monkeypatch.setattr("anghiari.mapper._get_reranker", lambda: _stub_reranker())
 
     result = search_technique("The attacker repeatedly guessed passwords.", top_k=1)
     payload = search_result_to_dict(result)
 
     assert payload["text"] == "The attacker repeatedly guessed passwords."
     assert payload["best_match"]["technique_id"] == "T1110"
-    assert payload["matches"][0]["confidence"] == "HIGH"
-    assert payload["matches"][0]["co_techniques"][0]["technique_id"] == "T1078"
+    assert payload["matches"][0]["co_techniques"] == []
+    assert "confidence" not in payload["matches"][0]
+    assert "rationale" not in payload["matches"][0]
 
 
-def test_search_technique_filters_low_confidence(monkeypatch) -> None:
+def test_search_technique_filters_low_score(monkeypatch) -> None:
     monkeypatch.setattr(
         "anghiari.mapper.scan_text", lambda query, top_n: _dummy_scan_result()
     )
-    monkeypatch.setattr(
-        "anghiari.mapper._llm_call_multi",
-        lambda messages, max_matches: [
-            type(
-                "LLMMatch",
-                (),
-                {
-                    "technique_id": "T1110",
-                    "name": "Brute Force",
-                    "confidence": "LOW",
-                    "rationale": "Weak match.",
-                },
-            )()
-        ],
-    )
     monkeypatch.setattr("anghiari.mapper._get_subtech_map", lambda: {})
+    monkeypatch.setattr(
+        "anghiari.mapper._get_reranker", lambda: _stub_reranker(score=0.10)
+    )
 
     result = search_technique("The attacker repeatedly guessed passwords.", top_k=1)
 
     assert result.matches == []
     assert result.best_match is None
-
-
-def test_search_technique_falls_back_when_reranking_fails(monkeypatch) -> None:
-    monkeypatch.setattr(
-        "anghiari.mapper.scan_text", lambda query, top_n: _dummy_scan_result()
-    )
-    monkeypatch.setattr(
-        "anghiari.mapper._llm_call_multi",
-        lambda messages, max_matches: (_ for _ in ()).throw(
-            LLMStructuredOutputError("invalid schema")
-        ),
-    )
-    monkeypatch.setattr("anghiari.mapper._get_subtech_map", lambda: {})
-
-    result = search_technique(
-        "The attacker repeatedly guessed passwords.", top_k=1, all_confidence=True
-    )
-
-    assert result.matches[0].confidence == "UNKNOWN"
-    assert result.matches[0].rationale == "Not provided."
 
 
 def test_validate_top_k_guardrails() -> None:
@@ -182,7 +143,7 @@ def test_cli_json_matches_programmatic_contract(monkeypatch, tmp_path) -> None:
     assert json.loads(cli_result.stdout) == search_result_to_dict(result)
 
 
-def test_cli_no_reranking_sets_unknown_fields(monkeypatch, tmp_path) -> None:
+def test_cli_no_reranking_keeps_score_only_schema(monkeypatch, tmp_path) -> None:
     input_file = tmp_path / "input.txt"
     input_file.write_text("The attacker repeatedly guessed passwords.")
     monkeypatch.setattr(
@@ -195,8 +156,8 @@ def test_cli_no_reranking_sets_unknown_fields(monkeypatch, tmp_path) -> None:
 
     assert cli_result.exit_code == 0
     payload = json.loads(cli_result.stdout)
-    assert payload["matches"][0]["confidence"] == "UNKNOWN"
-    assert payload["matches"][0]["rationale"] == "Not provided."
+    assert "confidence" not in payload["matches"][0]
+    assert "rationale" not in payload["matches"][0]
 
 
 def test_mcp_json_and_text_tools(monkeypatch) -> None:
@@ -210,5 +171,5 @@ def test_mcp_json_and_text_tools(monkeypatch) -> None:
 
     assert search_attack_technique_json("x", top_k=1) == search_result_to_dict(result)
     text = search_attack_technique_best("x", top_k=1)
-    assert "T1110 Brute Force [HIGH]" in text
-    assert "Reason: Repeated password guessing matches brute force." in text
+    assert "T1110 Brute Force" in text
+    assert "Score: 0.910" in text

@@ -63,7 +63,7 @@ def search(
     no_reranking: bool = typer.Option(
         False,
         "--no-reranking",
-        help="Skip LLM reranking and subtechnique refinement; use scanner scores only",
+        help="Skip dedicated reranking and subtechnique refinement; use scanner scores only",
     ),
     json_output: bool = typer.Option(
         False,
@@ -73,7 +73,7 @@ def search(
     all_confidence: bool = typer.Option(
         False,
         "--all-confidence",
-        help="Include lower confidence matches (GUESS, LOW, MEDIUM)",
+        help="Include lower-score matches below the default high-confidence threshold",
     ),
 ) -> None:
     """[bold]Search[/bold] a threat description for MITRE ATT&CK techniques.
@@ -81,8 +81,8 @@ def search(
     Accepts any length of text — a short query phrase, a paragraph, or a full
     threat report (via --file or stdin).  Always shows which passage in the
     source triggered each match. Pass --no-reranking for faster scanner-only
-    results with UNKNOWN confidence and no LLM rationale. JSON output matches
-    the API and MCP response shape.
+    results. By default, low-score reranker results are filtered out unless
+    --all-confidence is set. JSON output matches the API and MCP response shape.
     """
     from .mapper import search_technique, validate_top_k
     from .models import CoTechnique as ResultCoTechnique
@@ -135,8 +135,6 @@ def search(
                         start=m.start,
                         end=m.end,
                         color_idx=m.color_idx,
-                        confidence="UNKNOWN",
-                        rationale="Not provided.",
                         co_techniques=[
                             ResultCoTechnique(
                                 technique_id=co.technique_id,
@@ -168,8 +166,6 @@ def search(
                         start=m.start,
                         end=m.end,
                         color_idx=m.color_idx,
-                        confidence=m.confidence,
-                        rationale=m.rationale,
                         co_techniques=[
                             CoTechnique(
                                 technique_id=co.technique_id,
@@ -231,6 +227,30 @@ def mcp() -> None:
     from .mcp import run
 
     run()
+
+
+@app.command("eval-rerankers")
+def eval_rerankers(
+    fixtures: Optional[Path] = typer.Option(
+        None,
+        "--fixtures",
+        help="Path to bakeoff fixtures JSON (defaults to evals/reranker_bakeoff.json)",
+    ),
+    top_k: int = typer.Option(
+        3, "--top-k", help="How many matches each model may return during the bakeoff"
+    ),
+    json_output: bool = typer.Option(
+        False, "--json", help="Output structured JSON instead of a text report"
+    ),
+    show_manifest: bool = typer.Option(
+        False,
+        "--show-manifest",
+        help="Print the default model presets and fixture path, then exit",
+    ),
+) -> None:
+    """This temporary reranker bakeoff command has been removed."""
+    typer.echo("Error: eval-rerankers has been removed.", err=True)
+    raise typer.Exit(1)
 
 
 def main() -> None:

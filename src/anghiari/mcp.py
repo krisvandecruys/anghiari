@@ -14,8 +14,8 @@ mcp = FastMCP(
     name="Anghiari",
     instructions=(
         "Searches for and maps free-text descriptions of attack behaviors to MITRE ATT&CK "
-        "Enterprise techniques. Uses local embeddings (Harrier) for semantic search and a "
-        "local LLM (Nemotron) for reasoning. Returns JSON containing the original text, "
+        "Enterprise techniques. Uses local embeddings (Harrier) for semantic search and "
+        "Qwen3-Reranker-4B for local reranking. Returns JSON containing the original text, "
         "chunk-grounded matches, and the best match when available."
     ),
 )
@@ -31,7 +31,7 @@ def search_attack_technique_json(
         query: Natural-language description of the observed attack behavior.
         top_k: Maximum number of technique matches to return.
                Defaults to the value configured in config.toml (default: 5).
-        all_confidence: If true, include matches with confidence below HIGH.
+        all_confidence: If true, include matches below the high-confidence score threshold.
 
     Returns:
         A JSON-compatible dict matching the REST API response shape:
@@ -55,9 +55,9 @@ def search_attack_technique_best(
 
     best = result.best_match
     return (
-        f"{best.technique_id} {best.name} [{best.confidence}]\n"
+        f"{best.technique_id} {best.name}\n"
         f"Tactic: {best.tactic or 'unknown'}\n"
-        f"Reason: {best.rationale}\n"
+        f"Score: {best.score:.3f}\n"
         f"Source: {best.chunk_text}"
     )
 

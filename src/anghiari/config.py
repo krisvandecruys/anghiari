@@ -15,12 +15,9 @@ _CONFIG_DIR = Path("~/.config/anghiari").expanduser()
 _CONFIG_FILE = _CONFIG_DIR / "config.toml"
 _DEFAULT_CACHE_DIR = Path("~/.cache/anghiari").expanduser()
 
-_DEFAULT_SYSTEM_PROMPT = (
-    "You are a MITRE ATT&CK expert. Given an attack description and candidate techniques, "
-    "identify the most relevant matching technique(s) — return only techniques that genuinely fit. "
-    "Respond ONLY with valid JSON — no markdown, no extra text. "
-    "Express confidence as one of (ordered lowest to highest): GUESS < LOW < MEDIUM < HIGH < CERTAIN. "
-    "GUESS = weak signal, speculative match; CERTAIN = definitively matches, near-unmistakable."
+_DEFAULT_RERANKER_INSTRUCTION = (
+    "Given an attack description, determine whether the MITRE ATT&CK technique candidate "
+    "is a true match."
 )
 
 _DEFAULT_TOML = """\
@@ -37,14 +34,11 @@ model_id = "microsoft/harrier-oss-v1-0.6b"
 query_prefix = "Instruct: Retrieve the relevant MITRE ATT&CK technique.\\nQuery: "
 batch_size = 32
 
-[llm]
-repo_id = "nvidia/NVIDIA-Nemotron-3-Nano-4B-GGUF"
-filename = "NVIDIA-Nemotron3-Nano-4B-Q4_K_M.gguf"
-n_ctx = 8192
-n_gpu_layers = -1    # -1 = offload all layers to GPU (Metal on Apple Silicon)
-chat_format = "chatml"
-max_tokens = 512
-temperature = 0.1
+[reranker]
+model_id = "Qwen/Qwen3-Reranker-4B"
+high_threshold = 0.50
+medium_threshold = 0.20
+instruction = "Given an attack description, determine whether the MITRE ATT&CK technique candidate is a true match."
 
 [search]
 top_k = 5
@@ -57,10 +51,6 @@ port = 8000
 url = "https://raw.githubusercontent.com/mitre/cti/master/enterprise-attack/enterprise-attack.json"
 fetch_timeout = 60
 
-[prompts]
-system = "You are a MITRE ATT&CK expert. Given an attack description and candidate techniques, identify the most relevant matching technique(s) — return only techniques that genuinely fit. Respond ONLY with valid JSON — no markdown, no extra text. Express confidence as one of (ordered lowest to highest): GUESS < LOW < MEDIUM < HIGH < CERTAIN. GUESS = weak signal, speculative match; CERTAIN = definitively matches, near-unmistakable."
-description_truncate_phase1 = 300
-description_truncate_phase2 = 400
 """
 
 
@@ -74,14 +64,11 @@ class EmbedderConfig:
 
 
 @dataclass
-class LLMConfig:
-    repo_id: str = "nvidia/NVIDIA-Nemotron-3-Nano-4B-GGUF"
-    filename: str = "NVIDIA-Nemotron3-Nano-4B-Q4_K_M.gguf"
-    n_ctx: int = 8192
-    n_gpu_layers: int = -1
-    chat_format: str = "chatml"
-    max_tokens: int = 512
-    temperature: float = 0.1
+class RerankerConfig:
+    model_id: str = "Qwen/Qwen3-Reranker-4B"
+    high_threshold: float = 0.50
+    medium_threshold: float = 0.20
+    instruction: str = _DEFAULT_RERANKER_INSTRUCTION
 
 
 @dataclass
@@ -102,21 +89,13 @@ class StixConfig:
 
 
 @dataclass
-class PromptsConfig:
-    system: str = _DEFAULT_SYSTEM_PROMPT
-    description_truncate_phase1: int = 300
-    description_truncate_phase2: int = 400
-
-
-@dataclass
 class Config:
     cache_dir: Path = field(default_factory=lambda: _DEFAULT_CACHE_DIR)
     embedder: EmbedderConfig = field(default_factory=EmbedderConfig)
-    llm: LLMConfig = field(default_factory=LLMConfig)
+    reranker: RerankerConfig = field(default_factory=RerankerConfig)
     search: SearchConfig = field(default_factory=SearchConfig)
     api: APIConfig = field(default_factory=APIConfig)
     stix: StixConfig = field(default_factory=StixConfig)
-    prompts: PromptsConfig = field(default_factory=PromptsConfig)
 
     @property
     def stix_cache(self) -> Path:
@@ -134,11 +113,10 @@ class Config:
 def _build_config(data: dict) -> Config:
     defaults = Config()
     d_emb = data.get("embedder", {})
-    d_llm = data.get("llm", {})
+    d_reranker = data.get("reranker", {})
     d_search = data.get("search", {})
     d_api = data.get("api", {})
     d_stix = data.get("stix", {})
-    d_prompts = data.get("prompts", {})
     return Config(
         cache_dir=Path(data.get("cache_dir", str(defaults.cache_dir))).expanduser(),
         embedder=EmbedderConfig(
@@ -146,14 +124,15 @@ def _build_config(data: dict) -> Config:
             query_prefix=d_emb.get("query_prefix", defaults.embedder.query_prefix),
             batch_size=d_emb.get("batch_size", defaults.embedder.batch_size),
         ),
-        llm=LLMConfig(
-            repo_id=d_llm.get("repo_id", defaults.llm.repo_id),
-            filename=d_llm.get("filename", defaults.llm.filename),
-            n_ctx=d_llm.get("n_ctx", defaults.llm.n_ctx),
-            n_gpu_layers=d_llm.get("n_gpu_layers", defaults.llm.n_gpu_layers),
-            chat_format=d_llm.get("chat_format", defaults.llm.chat_format),
-            max_tokens=d_llm.get("max_tokens", defaults.llm.max_tokens),
-            temperature=d_llm.get("temperature", defaults.llm.temperature),
+        reranker=RerankerConfig(
+            model_id=d_reranker.get("model_id", defaults.reranker.model_id),
+            high_threshold=d_reranker.get(
+                "high_threshold", defaults.reranker.high_threshold
+            ),
+            medium_threshold=d_reranker.get(
+                "medium_threshold", defaults.reranker.medium_threshold
+            ),
+            instruction=d_reranker.get("instruction", defaults.reranker.instruction),
         ),
         search=SearchConfig(
             top_k=d_search.get("top_k", defaults.search.top_k),
@@ -165,17 +144,6 @@ def _build_config(data: dict) -> Config:
         stix=StixConfig(
             url=d_stix.get("url", defaults.stix.url),
             fetch_timeout=d_stix.get("fetch_timeout", defaults.stix.fetch_timeout),
-        ),
-        prompts=PromptsConfig(
-            system=d_prompts.get("system", defaults.prompts.system),
-            description_truncate_phase1=d_prompts.get(
-                "description_truncate_phase1",
-                defaults.prompts.description_truncate_phase1,
-            ),
-            description_truncate_phase2=d_prompts.get(
-                "description_truncate_phase2",
-                defaults.prompts.description_truncate_phase2,
-            ),
         ),
     )
 
