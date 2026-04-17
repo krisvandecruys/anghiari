@@ -2,7 +2,7 @@
 
 > *The Battle of Anghiari was lost to time, yet studied and interpreted for centuries. So are the techniques of adversaries.*
 
-![Battle of Anghiari](https://commons.wikimedia.org/wiki/Category:The_Battle_of_Anghiari_by_Leonardo_da_Vinci#/media/File:Peter_Paul_Ruben's_copy_of_the_lost_Battle_of_Anghiari.jpg)
+[![Battle of Anghiari](https://upload.wikimedia.org/wikipedia/commons/c/c4/Peter_Paul_Ruben%27s_copy_of_the_lost_Battle_of_Anghiari.jpg)](https://commons.wikimedia.org/wiki/File:Peter_Paul_Ruben%27s_copy_of_the_lost_Battle_of_Anghiari.jpg)
 
 Anghiari searches free-text descriptions of attack behaviors against [MITRE ATT&CK](https://attack.mitre.org/) Enterprise techniques. Give it a sentence about what an attacker did; it returns the technique ID, a verbal confidence level, and the reasoning behind the match.
 
