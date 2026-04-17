@@ -358,16 +358,16 @@ def render(result: ScanResult) -> str:
             excerpt += "…"
         conf_badge = f"  [{m.confidence}]" if m.confidence else ""
         lines.append(
-            f"{c}{_BOLD}{label}{_RESET} {m.score:.3f}  "
-            f"{m.technique_id:<12} {m.name:<40} {m.tactic}{conf_badge}"
+            f"{c}{_BOLD}{label}{_RESET} {_BOLD}{m.score:.3f}  "
+            f"{c}{_BOLD}{m.technique_id:<12}{_RESET} {_BOLD}{m.name:<40} {m.tactic}{conf_badge}{_RESET}"
         )
         for co in m.co_techniques:
             lines.append(
-                f"         {c}also: {co.technique_id:<12} {co.name}  ({co.score:.3f}){_RESET}"
+                f"         also: {c}{co.technique_id:<12}{_RESET} {co.name}  ({co.score:.3f})"
             )
-        lines.append(f'    {c}↳ "{excerpt}"{_RESET}')
+        lines.append(f'    {c}↳{_RESET} "{excerpt}"')
         if m.rationale:
-            lines.append(f"    {c}↳ {m.rationale}{_RESET}")
+            lines.append(f"    {c}↳{_RESET} {m.rationale}")
         lines.append("")
 
     # ── Block 2: annotated source text ────────────────────────────────────────
