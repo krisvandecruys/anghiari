@@ -7,6 +7,7 @@ import dataclasses
 import json
 import logging
 import os
+import threading
 from typing import Any
 
 import chromadb
@@ -22,6 +23,10 @@ COLLECTION_NAME = "mitre_techniques"
 _collection = None
 _reranker: CrossEncoder | None = None
 _subtech_map: dict[str, list[dict]] | None = None
+_collection_lock = threading.Lock()
+_reranker_lock = threading.Lock()
+_subtech_map_lock = threading.Lock()
+_search_lock = threading.Lock()
 
 
 @contextlib.contextmanager
@@ -44,45 +49,51 @@ def _quiet_stdouterr():
 def _get_collection():
     global _collection
     if _collection is None:
-        from .config import get_config
+        with _collection_lock:
+            if _collection is None:
+                from .config import get_config
 
-        chroma_dir = get_config().chroma_dir
-        if not chroma_dir.exists():
-            raise RuntimeError(
-                f"ChromaDB index not found at {chroma_dir}. Run `anghiari index` first."
-            )
-        client = chromadb.PersistentClient(path=str(chroma_dir))
-        _collection = client.get_collection(COLLECTION_NAME)
+                chroma_dir = get_config().chroma_dir
+                if not chroma_dir.exists():
+                    raise RuntimeError(
+                        f"ChromaDB index not found at {chroma_dir}. Run `anghiari index` first."
+                    )
+                client = chromadb.PersistentClient(path=str(chroma_dir))
+                _collection = client.get_collection(COLLECTION_NAME)
     return _collection
 
 
 def _get_subtech_map() -> dict[str, list[dict]]:
     global _subtech_map
     if _subtech_map is None:
-        from .config import get_config
+        with _subtech_map_lock:
+            if _subtech_map is None:
+                from .config import get_config
 
-        subtech_map_file = get_config().subtech_map
-        if not subtech_map_file.exists():
-            raise RuntimeError(
-                f"Subtechnique map not found at {subtech_map_file}. "
-                "Run `anghiari index` first."
-            )
-        _subtech_map = json.loads(subtech_map_file.read_text())
+                subtech_map_file = get_config().subtech_map
+                if not subtech_map_file.exists():
+                    raise RuntimeError(
+                        f"Subtechnique map not found at {subtech_map_file}. "
+                        "Run `anghiari index` first."
+                    )
+                _subtech_map = json.loads(subtech_map_file.read_text())
     return _subtech_map
 
 
 def _get_reranker() -> CrossEncoder:
     global _reranker
     if _reranker is None:
-        from .config import get_config
+        with _reranker_lock:
+            if _reranker is None:
+                from .config import get_config
 
-        cfg = get_config().reranker
-        _log.info("Loading reranker (%s)", cfg.model_id)
-        with _quiet_stdouterr():
-            _reranker = CrossEncoder(
-                cfg.model_id,
-                prompts={"attack_match": cfg.instruction},
-            )
+                cfg = get_config().reranker
+                _log.info("Loading reranker (%s)", cfg.model_id)
+                with _quiet_stdouterr():
+                    _reranker = CrossEncoder(
+                        cfg.model_id,
+                        prompts={"attack_match": cfg.instruction},
+                    )
     return _reranker
 
 
@@ -229,23 +240,43 @@ def search_technique(
     query: str, top_k: int | None = None, all_confidence: bool = False
 ) -> SearchResult:
     """Map a free-text attack description to one or more MITRE ATT&CK techniques."""
-    top_k = validate_top_k(top_k)
+    with _search_lock:
+        top_k = validate_top_k(top_k)
 
-    top_scan = top_k * 2
-    _log.info("Scanning text against MITRE ATT&CK techniques (top %d)...", top_scan)
-    scan_result: ScanResult = scan_text(query, top_scan)
-    if not scan_result.matches:
-        return SearchResult(text=query, matches=[])
+        top_scan = top_k * 2
+        _log.info("Scanning text against MITRE ATT&CK techniques (top %d)...", top_scan)
+        scan_result: ScanResult = scan_text(query, top_scan)
+        if not scan_result.matches:
+            return SearchResult(text=query, matches=[])
 
-    _log.info("Running Qwen3-Reranker-4B over chunk-level candidates...")
-    resolved = _rerank_matches(scan_result.matches, top_k)
+        _log.info("Running Qwen3-Reranker-4B over chunk-level candidates...")
+        resolved = _rerank_matches(scan_result.matches, top_k)
 
-    if not all_confidence:
-        _log.info(
-            "Filtering matches to the configured high-confidence score threshold..."
-        )
-        resolved = [m for m in resolved if _passes_default_threshold(m.score)]
-        for idx, match in enumerate(resolved):
-            resolved[idx].color_idx = idx
+        if not all_confidence:
+            _log.info(
+                "Filtering matches to the configured high-confidence score threshold..."
+            )
+            resolved = [m for m in resolved if _passes_default_threshold(m.score)]
+            for idx, match in enumerate(resolved):
+                resolved[idx].color_idx = idx
 
-    return SearchResult(text=query, matches=resolved[:top_k])
+        return SearchResult(text=query, matches=resolved[:top_k])
+
+
+def warmup_backend() -> None:
+    """Preload local models and index so the first real request is faster."""
+    from .embedder import embed_documents
+    from .scanner import _get_tech_matrix
+
+    _log.info("Warming search backend...")
+    _get_collection()
+    _get_subtech_map()
+    _get_tech_matrix()
+    embed_documents(["warmup"], show_progress=False)
+    reranker = _get_reranker()
+    reranker.rank(
+        "warmup",
+        ["[T0000] Warmup\nTactic: test\nDescription: warmup\nChunk: warmup"],
+        prompt_name="attack_match",
+    )
+    _log.info("Search backend warmup complete.")

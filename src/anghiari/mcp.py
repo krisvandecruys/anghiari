@@ -5,10 +5,17 @@ Run with:  anghiari mcp                                          (stdio, for Cla
            fastmcp run anghiari.mcp:mcp --transport streamable-http --port 8001   (HTTP)
 """
 
+import sys
+
 from fastmcp import FastMCP
 
-from .mapper import search_technique, validate_top_k
+from .mapper import search_technique, validate_top_k, warmup_backend
 from .models import search_result_to_dict
+
+
+def _mcp_debug(message: str) -> None:
+    # Keep protocol traffic on stdout; emit diagnostics on stderr only.
+    print(f"[anghiari-mcp] {message}", file=sys.stderr, flush=True)
 
 mcp = FastMCP(
     name="Anghiari",
@@ -39,9 +46,16 @@ def search_attack_technique_json(
           - matches: chunk-grounded technique matches
           - best_match: first entry in matches, when present
     """
-    return search_result_to_dict(
-        search_technique(query, validate_top_k(top_k), all_confidence)
+    resolved_top_k = validate_top_k(top_k)
+    preview = query.strip().replace("\n", " ")[:120]
+    _mcp_debug(
+        f"json request start top_k={resolved_top_k} all_confidence={all_confidence} query={preview!r}"
     )
+    result = search_technique(query, resolved_top_k, all_confidence)
+    _mcp_debug(
+        f"json request done matches={len(result.matches)} best={result.best_match.technique_id if result.best_match else 'none'}"
+    )
+    return search_result_to_dict(result)
 
 
 @mcp.tool()
@@ -49,7 +63,15 @@ def search_attack_technique_best(
     query: str, top_k: int | None = None, all_confidence: bool = False
 ) -> str:
     """Return a concise multi-line best answer for an LLM client."""
-    result = search_technique(query, validate_top_k(top_k), all_confidence)
+    resolved_top_k = validate_top_k(top_k)
+    preview = query.strip().replace("\n", " ")[:120]
+    _mcp_debug(
+        f"best request start top_k={resolved_top_k} all_confidence={all_confidence} query={preview!r}"
+    )
+    result = search_technique(query, resolved_top_k, all_confidence)
+    _mcp_debug(
+        f"best request done matches={len(result.matches)} best={result.best_match.technique_id if result.best_match else 'none'}"
+    )
     if not result.best_match:
         return "No matching technique found."
 
@@ -63,4 +85,8 @@ def search_attack_technique_best(
 
 
 def run() -> None:
+    _mcp_debug("server starting")
+    _mcp_debug("warming backend")
+    warmup_backend()
+    _mcp_debug("backend warmup complete")
     mcp.run()

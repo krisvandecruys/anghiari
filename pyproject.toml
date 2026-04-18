@@ -1,6 +1,6 @@
 [project]
 name = "anghiari"
-version = "1.6.5"
+version = "1.7.0"
 description = "Maps free-text attack descriptions to MITRE ATT&CK techniques using local ML"
 readme = "README.md"
 requires-python = ">=3.13"
