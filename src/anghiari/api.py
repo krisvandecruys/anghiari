@@ -14,7 +14,7 @@ from litestar import Litestar, post
 from litestar.openapi import OpenAPIConfig
 from litestar.exceptions import ValidationException
 
-from .__about__ import __version__
+from . import __version__
 from .mapper import search_technique, validate_top_k
 from .models import search_result_to_dict
 
