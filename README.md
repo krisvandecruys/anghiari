@@ -48,6 +48,35 @@ cd anghiari
 uv sync
 ```
 
+## Local maintenance
+
+For local verification before pushing changes:
+
+```bash
+uv run python scripts/check.py
+```
+
+For local releases from a clean `main` branch after merging a feature branch:
+
+```bash
+uv run python scripts/release.py patch
+uv run python scripts/release.py minor
+uv run python scripts/release.py major
+```
+
+What `scripts/release.py` does:
+
+- confirms you are on `main`
+- confirms the working tree is clean
+- fast-forwards `main` from `origin/main`
+- bumps the version via `uv version --bump ...`
+- runs the local verification suite
+- commits the version bump
+- creates the git tag
+- pushes `main` and the tag
+
+The version is maintained in `pyproject.toml` as the single manual source of truth.
+
 ## Usage
 
 ### Build the index (once)
@@ -197,7 +226,6 @@ The index and model weights are excluded from version control. After cloning, ru
 ```
 src/anghiari/
 ├── __init__.py      public API: search_technique, SearchResult, TechniqueMatch
-├── __about__.py     package version
 ├── cli.py           Typer CLI  ← anghiari search / index / api / mcp
 ├── config.py        config loader — reads ~/.config/anghiari/config.toml
 ├── mapper.py        shared backend for CLI / API / MCP search
